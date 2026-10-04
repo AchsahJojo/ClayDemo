@@ -1,0 +1,70 @@
+@import "tailwindcss";
+
+:root {
+  --bg0: #f3efe6;
+  --bg1: #e7eef0;
+  --ink: #1c1917;
+  --muted: #57534e;
+  --panel: #fffdf8;
+  --line: #d6d0c4;
+  --teal: #0f766e;
+  --teal-soft: #ccfbf1;
+  --amber: #b45309;
+  --amber-soft: #ffedd5;
+  --blue: #1d4ed8;
+  --danger: #9f1239;
+}
+
+@theme inline {
+  --color-background: var(--bg0);
+  --color-foreground: var(--ink);
+  --font-sans: var(--font-sans);
+  --font-display: var(--font-display);
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--ink);
+  font-family: var(--font-sans), "Source Sans 3", sans-serif;
+  background:
+    radial-gradient(1200px 500px at 10% -10%, #d9ece8 0%, transparent 55%),
+    radial-gradient(900px 420px at 90% 0%, #f3e0c8 0%, transparent 50%),
+    linear-gradient(165deg, var(--bg0), var(--bg1));
+}
+
+h1,
+h2,
+h3,
+.brand {
+  font-family: var(--font-display), Fraunces, Georgia, serif;
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes meter-fill {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+.rise {
+  animation: rise-in 0.55s ease-out both;
+}
+
+.meter-bar > span {
+  transform-origin: left center;
+  animation: meter-fill 0.8s ease-out both;
+}

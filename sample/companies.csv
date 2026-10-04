@@ -1,0 +1,31 @@
+"Company Domain","Find contacts at company","Name People","Title People","Url People","Work Email Data Provider","Work Email","Find company employee count","Companyempcount","Companyemprange","ICP Pass"
+"pitch.com","Returned 1 People","Adam Renklint","Co-founder & CEO","https://www.linkedin.com/in/adam-renklint/","Findymail","adam@pitch.com","✅ Found 76",76,"51 to 200",true
+"planetscale.com","❌ No Profile Found",,,,"None found",,"✅ Found 99",99,"51 to 200",true
+"attio.com","Returned 2 People","Hannah Ruis","Executive Assistant to CEO","https://www.linkedin.com/in/hannahruis/","Findymail","hannah.ruis@attio.com","✅ Found 191",191,"51 to 200",true
+"clerk.com","❌ No Profile Found",,,,"None found",,"✅ Found 207",207,"201 to 500",true
+"segment.com","❌ No Profile Found",,,,"None found",,"❌ No employee count found",,,false
+"posthog.com","Returned 2 People","james hawkins","co-ceo","https://www.linkedin.com/in/james-hawkins-01741630/","Findymail","james@posthog.com","✅ Found 211",211,"201 to 500",true
+"loom.com","Returned 1 People","Joe Thomas","Co-founder, CEO","https://www.linkedin.com/in/joe-thomas-49374827/","Findymail","joe@loom.com","✅ Found 258",258,"201 to 500",true
+"linear.app","Returned 1 People","Natalie Stratton","Executive Assistant to Chief Executive Officer","https://www.linkedin.com/in/natalie-stratton-4510888b/","Findymail","natalie.stratton@linear.app","✅ Found 275",275,"201 to 500",true
+"retool.com","Returned 2 People","David Hsu","Founder, CEO","https://www.linkedin.com/in/david-hsu-90a5846/","Findymail","david@retool.com","✅ Found 478",478,"201 to 500",true
+"supabase.com","Returned 1 People","Paul Copplestone","CEO & Co-Founder","https://www.linkedin.com/in/paulcopplestone/","Findymail","paul@supabase.com","✅ Found 406",406,"201 to 500",true
+"replit.com",,,,,"None found",,,,,false
+"mixpanel.com",,,,,"None found",,,,,false
+"apollo.io",,,,,"None found",,,,,false
+"vercel.com",,,,,"None found",,,,,false
+"intercom.com",,,,,"None found",,,,,false
+"amplitude.com",,,,,"None found",,,,,false
+"miro.com",,,,,"None found",,,,,false
+"gong.io",,,,,"None found",,,,,false
+"lattice.com",,,,,"None found",,,,,false
+"dropbox.com",,,,,"None found",,,,,false
+"asana.com",,,,,"None found",,,,,false
+"box.com",,,,,"None found",,,,,false
+"airtable.com",,,,,"None found",,,,,false
+"figma.com",,,,,"None found",,,,,false
+"clickup.com",,,,,"None found",,,,,false
+"webflow.com",,,,,"None found",,,,,false
+"brex.com",,,,,"None found",,,,,false
+"ramp.com",,,,,"None found",,,,,false
+"notion.com",,,,,"None found",,,,,false
+"monday.com",,,,,"None found",,,,,false
