@@ -39,3 +39,4 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+health-strip.webp\nrecommendations-r1-r4-r5.webp\nBROWSER_TEST_RESULTS.md\n*.webp

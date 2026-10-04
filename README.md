@@ -19,6 +19,11 @@ npm run build
 
 Sample fixtures load automatically from [`sample/companies.csv`](sample/companies.csv) (your Clay export) and [`sample/workflow.json`](sample/workflow.json).
 
+**Live demo (temporary Vercel claim):** https://temporary-swift-boron-jjs9prv.vercel.app  
+Claim to keep: https://vercel.com/claim-deployment?code=ad40ca5c-9081-42d0-9855-028075b3b2d7
+
+Or connect the repo to your Vercel account for a stable URL.
+
 ## Architecture
 
 ```mermaid

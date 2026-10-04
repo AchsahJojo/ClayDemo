@@ -89,10 +89,20 @@ export default function HomePage() {
             {pending ? "Analyzing…" : "Analyze workflow"}
           </button>
           <button
+            type="button"
             className="rounded-md border border-[var(--line)] bg-[var(--panel)] px-4 py-2 text-sm font-medium"
-            onClick={() => setShowEngine((v) => !v)}
+            aria-expanded={showEngine}
+            onClick={() => {
+              setShowEngine((v) => !v);
+              queueMicrotask(() => {
+                document.getElementById("engine-json")?.scrollIntoView({
+                  behavior: "smooth",
+                  block: "start",
+                });
+              });
+            }}
           >
-            Why not GPT?
+            {showEngine ? "Hide engine JSON" : "Why not GPT?"}
           </button>
         </div>
       </header>
@@ -214,7 +224,10 @@ export default function HomePage() {
       )}
 
       {showEngine && result && (
-        <section className="rise mt-8 rounded-xl border border-[var(--line)] bg-[#1c1917] p-4 text-[#f5f5f4]">
+        <section
+          id="engine-json"
+          className="rise mt-8 rounded-xl border border-[var(--line)] bg-[#1c1917] p-4 text-[#f5f5f4]"
+        >
           <h2 className="text-lg text-[#ccfbf1]">Engine JSON (why not GPT?)</h2>
           <p className="mt-1 text-sm text-[#a8a29e]">
             The model only narrates these fields — it does not invent savings.
