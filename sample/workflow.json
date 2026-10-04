@@ -1,0 +1,114 @@
+{
+  "name": "Workflow Health Demo — Before",
+  "description": "Wasteful order: paid enrichments before ICP filter. Costs locked from Clay Usage history.",
+  "steps": [
+    {
+      "id": "find_contacts",
+      "name": "Find contacts at company",
+      "type": "enrich",
+      "field": "Find contacts at company",
+      "dependsOn": [],
+      "actionCost": 1,
+      "dataCreditCost": 0.5,
+      "provider": "Companies, People, Jobs"
+    },
+    {
+      "id": "work_email",
+      "name": "Find Work Email",
+      "type": "waterfall",
+      "field": "Work Email",
+      "dependsOn": ["find_contacts"],
+      "actionCost": 1,
+      "dataCreditCost": 0,
+      "providerWinColumn": "Work Email Data Provider",
+      "providers": [
+        {
+          "id": "findymail",
+          "name": "Findymail",
+          "dataCreditCost": 0.5,
+          "hitRate": 0.233
+        },
+        {
+          "id": "prospeo",
+          "name": "Prospeo",
+          "dataCreditCost": 0.3,
+          "hitRate": 0.4
+        },
+        {
+          "id": "hunter",
+          "name": "Hunter",
+          "dataCreditCost": 0.2,
+          "hitRate": 0.25
+        }
+      ]
+    },
+    {
+      "id": "validate_email",
+      "name": "Validate Findymail",
+      "type": "enrich",
+      "field": "Work Email",
+      "dependsOn": ["work_email"],
+      "actionCost": 1,
+      "dataCreditCost": 0.1,
+      "provider": "Verify email (Findymail)",
+      "runCondition": {
+        "field": "Work Email",
+        "op": "not_blank"
+      }
+    },
+    {
+      "id": "employee_count",
+      "name": "Find company employee count",
+      "type": "enrich",
+      "field": "Companyempcount",
+      "dependsOn": [],
+      "actionCost": 1,
+      "dataCreditCost": 2.0,
+      "provider": "SMARTe",
+      "statusColumn": "Find company employee count"
+    },
+    {
+      "id": "emp_range_formula",
+      "name": "Company employee range",
+      "type": "ai_formula",
+      "field": "Companyemprange",
+      "dependsOn": ["employee_count"],
+      "actionCost": 0,
+      "dataCreditCost": 0,
+      "taskClass": "deterministic",
+      "purpose": "Map employee count into a band (e.g. 51 to 200)"
+    },
+    {
+      "id": "title_cleanup_use_ai",
+      "name": "Normalize job title casing",
+      "type": "use_ai",
+      "field": "Title People",
+      "dependsOn": ["find_contacts"],
+      "actionCost": 1,
+      "dataCreditCost": 0,
+      "taskClass": "deterministic",
+      "purpose": "Title-case and trim job titles already in the table"
+    },
+    {
+      "id": "icp_filter",
+      "name": "ICP Pass (50–500 employees)",
+      "type": "filter",
+      "field": "ICP Pass",
+      "dependsOn": ["employee_count", "emp_range_formula"],
+      "actionCost": 0,
+      "dataCreditCost": 0,
+      "passColumn": "ICP Pass",
+      "passValue": "true"
+    },
+    {
+      "id": "export",
+      "name": "Export ICP rows",
+      "type": "export",
+      "field": "Company Domain",
+      "dependsOn": ["icp_filter", "validate_email", "title_cleanup_use_ai"],
+      "actionCost": 1,
+      "dataCreditCost": 0,
+      "isFinalOutput": true
+    }
+  ]
+}
