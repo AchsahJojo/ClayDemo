@@ -80,6 +80,3 @@ Hit rates come from the provider-win column when present, else declared rates in
 - **R4** Waterfall provider reorder
 - **R5** Wrong AI tier (`use_ai` / `claygent` → free `ai_formula`)
 
-## Demo script
-
-See [`DEMO_SCRIPT.md`](DEMO_SCRIPT.md).
