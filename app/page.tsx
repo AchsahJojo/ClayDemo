@@ -173,14 +173,15 @@ export default function HomePage() {
   function exportFixed() {
     if (!workflow || !result) return;
     const fixed = buildFixedWorkflow(workflow, result);
-    const blob = new Blob([JSON.stringify(fixed, null, 2)], {
-      type: "application/json",
-    });
+    const text = JSON.stringify(fixed, null, 2);
+    const blob = new Blob([text], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
     a.download = "workflow-fixed.json";
+    document.body.appendChild(a);
     a.click();
+    a.remove();
     URL.revokeObjectURL(url);
   }
 
@@ -412,30 +413,42 @@ export default function HomePage() {
                     never jump before enrichments they need.
                   </p>
                 </div>
-                <div className="flex rounded-md border border-[var(--line)] bg-[var(--panel)] p-0.5 text-sm">
+                <div className="flex rounded-md border border-[var(--line)] bg-white p-0.5 text-sm shadow-sm">
                   <button
                     type="button"
-                    className={`rounded px-3 py-1.5 ${
+                    className={`rounded px-3 py-1.5 transition ${
                       graphMode === "before"
                         ? "bg-[var(--teal)] font-semibold text-white"
-                        : "text-[var(--muted)]"
+                        : "text-[var(--muted)] hover:text-[var(--ink)]"
                     }`}
-                    onClick={() => setGraphMode("before")}
+                    onClick={() => {
+                      setGraphMode("before");
+                    }}
                   >
                     Current
                   </button>
                   <button
                     type="button"
-                    className={`rounded px-3 py-1.5 ${
+                    className={`rounded px-3 py-1.5 transition ${
                       graphMode === "after"
                         ? "bg-[var(--teal)] font-semibold text-white"
-                        : "text-[var(--muted)]"
+                        : "text-[var(--muted)] hover:text-[var(--ink)]"
                     }`}
-                    onClick={() => setGraphMode("after")}
+                    onClick={() => {
+                      setGraphMode("after");
+                    }}
                   >
                     Suggested
                   </button>
                 </div>
+                {graphMode === "after" && (
+                  <p className="w-full text-xs font-medium text-[var(--teal)]">
+                    Showing suggested order
+                    {highlightIds.length
+                      ? ` · highlighting ${highlightIds.length} step${highlightIds.length === 1 ? "" : "s"}`
+                      : ""}
+                  </p>
+                )}
               </div>
               {workflow && (
                 <div className="mt-3">

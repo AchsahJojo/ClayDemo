@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   analyze,
+  buildFixedWorkflow,
   expectedWaterfallDataCredits,
   parseCsv,
   parseWorkflow,
@@ -173,6 +174,21 @@ describe("hand example simulation", () => {
     expect(r1.stepIds).toContain("find_contacts");
     const r4 = result.findings.find((f) => f.rule === "R4")!;
     expect(r4.details?.recommendedOrder).toEqual([
+      "prospeo",
+      "hunter",
+      "findymail",
+    ]);
+  });
+
+  it("buildFixedWorkflow applies order, waterfall, and AI Formula", () => {
+    const rows = makeRows();
+    const profile = profileCsv(rows, handWorkflow);
+    const result = analyze(handWorkflow, rows, profile);
+    const fixed = buildFixedWorkflow(handWorkflow, result);
+    expect(fixed.steps.map((s) => s.id)).toEqual(result.suggestedStepOrder);
+    expect(fixed.steps.find((s) => s.id === "title_cleanup")?.type).toBe("ai_formula");
+    const wf = fixed.steps.find((s) => s.id === "work_email");
+    expect(wf?.providers?.map((p) => p.id)).toEqual([
       "prospeo",
       "hunter",
       "findymail",

@@ -36,15 +36,20 @@ const TYPE_COLOR: Record<string, string> = {
 function FitViewOnChange({
   mode,
   highlightKey,
+  nodeCount,
 }: {
   mode: GraphMode;
   highlightKey: string;
+  nodeCount: number;
 }) {
   const { fitView } = useReactFlow();
   useEffect(() => {
-    const t = setTimeout(() => fitView({ padding: 0.2, duration: 200 }), 50);
-    return () => clearTimeout(t);
-  }, [mode, highlightKey, fitView]);
+    if (!nodeCount) return;
+    const t = requestAnimationFrame(() => {
+      fitView({ padding: 0.18, duration: 180, minZoom: 0.35, maxZoom: 1.1 });
+    });
+    return () => cancelAnimationFrame(t);
+  }, [mode, highlightKey, nodeCount, fitView]);
   return null;
 }
 
@@ -65,23 +70,26 @@ function GraphInner({
         ? result.suggestedStepOrder
         : workflow.steps.map((s) => s.id);
     const byId = new Map(workflow.steps.map((s) => [s.id, s]));
+    const cols = Math.min(3, Math.max(1, order.length));
 
     const nodes: Node[] = order.map((id, i) => {
       const step = byId.get(id)!;
       const sim = result.simulation.steps.find((s) => s.stepId === step.id);
       const isHi = highlight.size === 0 || highlight.has(step.id);
-      const providers =
+      const providerIds =
         step.type === "waterfall" && step.providers
-          ? `\n[${(
-              mode === "after"
-                ? result.suggestedWaterfallOrders[step.id] ??
-                  step.providers.map((p) => p.id)
-                : step.providers.map((p) => p.id)
-            ).join(" → ")}]`
-          : "";
+          ? mode === "after"
+            ? result.suggestedWaterfallOrders[step.id] ??
+              step.providers.map((p) => p.id)
+            : step.providers.map((p) => p.id)
+          : null;
+      const providers = providerIds ? `\n[${providerIds.join(" → ")}]` : "";
       return {
         id: step.id,
-        position: { x: (i % 4) * 240, y: Math.floor(i / 4) * 150 },
+        position: {
+          x: (i % cols) * 220,
+          y: Math.floor(i / cols) * 130,
+        },
         data: {
           label: `${step.name}\n${step.type}${sim ? `\n${sim.actionsUsed.toFixed(1)}A / ${sim.dataCreditsUsed.toFixed(1)}DC` : ""}${providers}`,
         },
@@ -90,8 +98,9 @@ function GraphInner({
             ? "2px solid #0f766e"
             : "1px solid #cbd5e1",
           borderRadius: 8,
-          padding: 12,
+          padding: 10,
           fontSize: 12,
+          lineHeight: 1.35,
           fontWeight: highlight.has(step.id) ? 600 : 400,
           whiteSpace: "pre-wrap",
           width: 200,
@@ -114,16 +123,16 @@ function GraphInner({
           target: step.id,
           markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 },
           style: {
-            stroke: highlight.size && (highlight.has(dep) || highlight.has(step.id))
-              ? "#0f766e"
-              : "#94a3b8",
+            stroke:
+              highlight.size && (highlight.has(dep) || highlight.has(step.id))
+                ? "#0f766e"
+                : "#94a3b8",
             strokeWidth: highlight.has(dep) || highlight.has(step.id) ? 2 : 1,
           },
         });
       }
     }
 
-    // Sequence ribbon for the active view order
     for (let i = 0; i < order.length - 1; i++) {
       const a = order[i];
       const b = order[i + 1];
@@ -135,7 +144,7 @@ function GraphInner({
         style: {
           stroke: mode === "after" ? "#0f766e" : "#a8a29e",
           strokeDasharray: mode === "after" ? "5 4" : "2 4",
-          opacity: 0.7,
+          opacity: 0.65,
         },
         markerEnd: {
           type: MarkerType.ArrowClosed,
@@ -150,18 +159,24 @@ function GraphInner({
   return (
     <div className="h-[420px] w-full overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--panel)]">
       <ReactFlow
+        key={`${mode}-${[...highlight].sort().join(",")}`}
         nodes={nodes}
         edges={edges}
         fitView
+        fitViewOptions={{ padding: 0.18, minZoom: 0.35, maxZoom: 1.1 }}
         proOptions={{ hideAttribution: true }}
-        minZoom={0.4}
-        maxZoom={1.4}
+        minZoom={0.35}
+        maxZoom={1.2}
+        nodesDraggable={false}
+        nodesConnectable={false}
+        elementsSelectable={false}
       >
         <Background gap={18} color="#e7e0d4" />
         <Controls showInteractive={false} />
         <FitViewOnChange
           mode={mode}
           highlightKey={[...highlight].sort().join(",")}
+          nodeCount={nodes.length}
         />
       </ReactFlow>
     </div>
