@@ -1,8 +1,8 @@
 # Clay Workflow Health
 
-Live demo for estimating **Actions** and **Data Credits** waste on a Clay table after the workflow is defined — not before a run.
+Find wasted Clay credits in your table — paid enrichments before free ICP filters, bad waterfall order, wrong AI tier — and export a fixed workflow.
 
-Pitch: *Clay already estimates cost before a run; this product estimates waste after you define the workflow, using query-optimizer thinking (predicate pushdown) on GTM tables — and tracks Actions and Data Credits as separate meters.*
+Clay already estimates **cost before a run**. This estimates **waste after you define the workflow**, with Actions and Data Credits tracked separately. Math is deterministic; AI only narrates.
 
 ## Quick start
 
@@ -13,11 +13,11 @@ npm run dev
 ```
 
 ```bash
-npm test   # Vitest hand-worked example + real CSV fixture
+npm test   # Vitest hand-worked example + sample CSV fixture
 npm run build
 ```
 
-Sample fixtures load automatically from [`sample/companies.csv`](sample/companies.csv) (your Clay export) and [`sample/workflow.json`](sample/workflow.json).
+Sample fixtures load automatically from [`sample/companies.csv`](sample/companies.csv) (synthetic demo rows) and [`sample/workflow.json`](sample/workflow.json).
 
 **Live demo (temporary Vercel claim):** https://temporary-swift-boron-jjs9prv.vercel.app  
 Claim to keep: https://vercel.com/claim-deployment?code=ad40ca5c-9081-42d0-9855-028075b3b2d7
@@ -48,6 +48,8 @@ flowchart LR
 | `/api/analyze` | CSV + workflow → findings JSON |
 | `/api/explain` | Narrates findings only (LLM if `OPENAI_API_KEY`, else template) |
 
+**R1** is dependency-aware: filters never move before enrichments they depend on.
+
 ## Dual meters (from your Usage history)
 
 | Step | DC / cell | Actions / cell |
@@ -74,8 +76,10 @@ Hit rates come from the provider-win column when present, else declared rates in
 
 ## Rules
 
-- **R1** Filter / ICP too late (predicate pushdown)
-- **R2** Missing run condition on paid lookup
-- **R3** Unused enrichment
-- **R4** Waterfall provider reorder
-- **R5** Wrong AI tier (`use_ai` / `claygent` → free `ai_formula`)
+- **R1** Filter earlier (dependency-safe predicate pushdown)
+- **R2** Add a run condition on paid lookup
+- **R3** Drop unused enrichment
+- **R4** Reorder waterfall providers
+- **R5** Use AI Formula for deterministic transforms
+
+Built by [Achsah Jojo](https://github.com/AchsahJojo) — [ClayDemo](https://github.com/AchsahJojo/ClayDemo).

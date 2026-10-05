@@ -1,5 +1,10 @@
 export { parseWorkflow, workflowSchema } from "./parse";
-export { topologicalOrder, dependentsMap } from "./dag";
+export {
+  topologicalOrder,
+  dependentsMap,
+  ancestorIds,
+  buildFilterPushdownOrder,
+} from "./dag";
 export {
   parseCsv,
   profileCsv,
@@ -12,5 +17,11 @@ export {
   expectedWaterfallDataCredits,
   resolveProviderHitRates,
 } from "./simulate";
-export { analyze, applyRules, computeMetrics } from "./rules";
+export {
+  analyze,
+  applyRules,
+  computeMetrics,
+  buildFixedWorkflow,
+  PLAIN_TITLES,
+} from "./rules";
 export type * from "./types";

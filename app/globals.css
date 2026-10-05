@@ -67,4 +67,5 @@ h3,
 .meter-bar > span {
   transform-origin: left center;
   animation: meter-fill 0.8s ease-out both;
+  max-width: 100%;
 }

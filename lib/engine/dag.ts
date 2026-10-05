@@ -67,3 +67,38 @@ export function dependentsMap(workflow: WorkflowDefinition): Map<string, Set<str
   }
   return map;
 }
+
+/** Transitive ancestors (dependsOn closure) of a step. */
+export function ancestorIds(
+  workflow: WorkflowDefinition,
+  stepId: string
+): Set<string> {
+  const byId = new Map(workflow.steps.map((s) => [s.id, s]));
+  const result = new Set<string>();
+  const stack = [...(byId.get(stepId)?.dependsOn ?? [])];
+  while (stack.length) {
+    const id = stack.pop()!;
+    if (result.has(id)) continue;
+    result.add(id);
+    for (const d of byId.get(id)?.dependsOn ?? []) stack.push(d);
+  }
+  return result;
+}
+
+/**
+ * Move a filter earlier without violating enrich→filter deps.
+ * Ancestors of the filter stay before it; other early steps move after.
+ */
+export function buildFilterPushdownOrder(
+  workflow: WorkflowDefinition,
+  filterId: string
+): string[] {
+  const mustBefore = ancestorIds(workflow, filterId);
+  const beforeOrdered = workflow.steps
+    .filter((s) => mustBefore.has(s.id))
+    .map((s) => s.id);
+  const restOrdered = workflow.steps
+    .filter((s) => s.id !== filterId && !mustBefore.has(s.id))
+    .map((s) => s.id);
+  return [...beforeOrdered, filterId, ...restOrdered];
+}

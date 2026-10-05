@@ -99,8 +99,6 @@ export interface SimulateOptions {
   waterfallOrders?: Record<string, string[]>;
   /** Reorder steps (ids) while preserving dependency legality is caller's job. */
   stepOrder?: string[];
-  /** Force filter steps to run first (predicate pushdown simulation). */
-  filtersFirst?: boolean;
 }
 
 function orderedSteps(
@@ -108,19 +106,6 @@ function orderedSteps(
   opts?: SimulateOptions
 ): WorkflowStep[] {
   const byId = new Map(workflow.steps.map((s) => [s.id, s]));
-  if (opts?.filtersFirst) {
-    const filters = workflow.steps.filter((s) => s.type === "filter");
-    const filterIds = new Set(filters.map((s) => s.id));
-    const restSteps = workflow.steps
-      .filter((s) => s.type !== "filter")
-      .map((s) => ({
-        ...s,
-        dependsOn: s.dependsOn.filter((d) => !filterIds.has(d)),
-      }));
-    const rest = topologicalOrder({ ...workflow, steps: restSteps });
-    // Filters first for billing reachability; dependents still conceptually after
-    return [...filters, ...rest];
-  }
   if (opts?.stepOrder?.length) {
     return opts.stepOrder.map((id) => {
       const s = byId.get(id);
@@ -178,7 +163,6 @@ export function simulate(
           passRate = step.passValue ? Number(step.passValue) : 0.5;
           if (Number.isNaN(passRate)) passRate = 0.5;
         }
-        // When filtersFirst and this is ICP, apply to full table
         rowsFlowing = rowsFlowing * (passRate ?? 1);
         if (step.passColumn === "ICP Pass" || /icp/i.test(step.name)) {
           sawIcpFilter = true;
