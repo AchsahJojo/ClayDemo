@@ -32,4 +32,5 @@ Provider-win columns override declared JSON rates. Without a win column, rates s
 ## V1 limitations
 
 - Independent hit-rate assumption across waterfall providers
+- Providers overlap in practice; overlap isn't visible in a CSV export, so reorder savings are estimates
 - $/Action and $/DC are inputs (plan-dependent)

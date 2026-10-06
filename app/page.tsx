@@ -479,6 +479,10 @@ export default function HomePage() {
             provider&apos;s data you keep — hard emails stay hard.
           </li>
           <li>
+            Providers overlap in practice; overlap isn&apos;t visible in a CSV export, so
+            reorder savings are estimates.
+          </li>
+          <li>
             $/Action and $/Data Credit are editable inputs (plan-dependent). Step unit
             costs still come from workflow JSON (Usage history).
           </li>
