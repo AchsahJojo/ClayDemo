@@ -15,7 +15,7 @@ const sans = Source_Sans_3({
 export const metadata: Metadata = {
   title: "Clay Workflow Health",
   description:
-    "Estimate Actions and Data Credit waste after you define a Clay workflow — predicate pushdown for GTM tables.",
+    "Find wasted Clay credits in your table — paid enrichments before filters, bad waterfalls, wrong AI tier — and export a fixed workflow.",
 };
 
 export default function RootLayout({

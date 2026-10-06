@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   analyze,
+  buildFixedWorkflow,
   expectedWaterfallDataCredits,
   parseCsv,
   parseWorkflow,
@@ -162,8 +163,32 @@ describe("hand example simulation", () => {
     const r1 = result.findings.find((f) => f.rule === "R1")!;
     expect(r1.savingsActions).toBeGreaterThan(0);
     expect(r1.savingsDataCredits).toBeGreaterThan(0);
+    // employee_count feeds ICP — must stay before the filter
+    expect(result.suggestedStepOrder.indexOf("employee_count")).toBeLessThan(
+      result.suggestedStepOrder.indexOf("icp_filter")
+    );
+    expect(result.suggestedStepOrder.indexOf("icp_filter")).toBeLessThan(
+      result.suggestedStepOrder.indexOf("find_contacts")
+    );
+    expect(r1.stepIds).not.toContain("employee_count");
+    expect(r1.stepIds).toContain("find_contacts");
     const r4 = result.findings.find((f) => f.rule === "R4")!;
     expect(r4.details?.recommendedOrder).toEqual([
+      "prospeo",
+      "hunter",
+      "findymail",
+    ]);
+  });
+
+  it("buildFixedWorkflow applies order, waterfall, and AI Formula", () => {
+    const rows = makeRows();
+    const profile = profileCsv(rows, handWorkflow);
+    const result = analyze(handWorkflow, rows, profile);
+    const fixed = buildFixedWorkflow(handWorkflow, result);
+    expect(fixed.steps.map((s) => s.id)).toEqual(result.suggestedStepOrder);
+    expect(fixed.steps.find((s) => s.id === "title_cleanup")?.type).toBe("ai_formula");
+    const wf = fixed.steps.find((s) => s.id === "work_email");
+    expect(wf?.providers?.map((p) => p.id)).toEqual([
       "prospeo",
       "hunter",
       "findymail",

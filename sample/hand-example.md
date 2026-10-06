@@ -32,16 +32,18 @@ For 10 rows: waterfall DC = 7.1; waterfall Actions = 10.
 - Actions = 10 + 10 + 7 + 10 + 0 + 10 + 0 + 4 = **51**
 - Data Credits = 10×0.5 + 7.1 + 7×0.1 + 10×2.0 + 0 = 5 + 7.1 + 0.7 + 20 = **32.8**
 
-## R1 (filter-too-late)
+## R1 (filter-too-late, dependency-aware)
 
-Paid steps before filter on the 6 ICP-fail rows:
+ICP depends on `employee_count`, so that enrich stays before the filter.
+Suggested order: employee_count → icp_filter → find_contacts → … → export.
+
+Movable paid waste on the 6 ICP-fail rows (not required by the filter):
 - contacts: 6×0.5 DC + 6 Act
 - waterfall: 6×0.71 DC + 6 Act
 - validate (assume 0.7×6 ≈ 4.2 rows): ~4.2×0.1 DC + 4.2 Act
-- employee: 6×2.0 DC + 6 Act
 - use_ai: 6 Act
 
-Engine computes exact waste via re-simulation after moving filter first.
+Employee count still runs on all 10 rows. Engine re-simulates with the dependency-safe order.
 
 ## R4 reorder (hitRate / dataCredit)
 

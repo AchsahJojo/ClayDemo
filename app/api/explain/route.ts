@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import type { AnalysisResult, Finding } from "@/lib/engine";
+import { PLAIN_TITLES } from "@/lib/engine";
 import { fmtNum, fmtUsd } from "@/lib/utils";
 
 export const runtime = "nodejs";
@@ -8,7 +9,7 @@ function templateExplain(result: AnalysisResult): string {
   const m = result.metrics;
   const lines: string[] = [];
   lines.push(
-    `This workflow uses about ${fmtNum(m.actionsUsed)} Actions and ${fmtNum(m.dataCreditsUsed)} Data Credits (~${fmtUsd(m.usdPerRun)}/run). Potential overlapping waste (R1–R3): ${fmtNum(m.wasteActions)} Actions and ${fmtNum(m.wasteDataCredits)} Data Credits.`
+    `This workflow costs about ${fmtUsd(m.usdPerRun)} per run (${fmtNum(m.actionsUsed)} Actions, ${fmtNum(m.dataCreditsUsed)} Data Credits). About ${fmtUsd(m.wasteUsd)} of that is waste you can fix.`
   );
   lines.push("");
   for (const f of result.findings) {
@@ -22,7 +23,8 @@ function templateExplain(result: AnalysisResult): string {
 }
 
 function formatFinding(f: Finding): string {
-  return `• [${f.rule}] ${f.title}: ${f.summary} Savings ≈ ${fmtNum(f.savingsActions)} Actions / ${fmtNum(f.savingsDataCredits)} Data Credits (${fmtUsd(f.savingsUsd)}).`;
+  const title = PLAIN_TITLES[f.rule] ?? f.title;
+  return `• ${title}: ${f.summary} Savings ≈ ${fmtUsd(f.savingsUsd)} (${fmtNum(f.savingsActions)} Actions / ${fmtNum(f.savingsDataCredits)} Data Credits).`;
 }
 
 async function llmExplain(result: AnalysisResult): Promise<string | null> {
@@ -42,7 +44,7 @@ async function llmExplain(result: AnalysisResult): Promise<string | null> {
           {
             role: "system",
             content:
-              "You narrate Clay workflow health findings. HARD RULE: only restate numbers present in the JSON. Never invent savings, costs, or hit rates. Keep under 220 words. Mention Actions and Data Credits as separate meters.",
+              "You narrate Clay workflow health findings for sales and RevOps. HARD RULE: only restate numbers present in the JSON. Never invent savings, costs, or hit rates. Keep under 220 words. Lead with dollar savings. Mention Actions and Data Credits as separate meters. Avoid database jargon.",
           },
           {
             role: "user",
