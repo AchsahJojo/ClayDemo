@@ -1,5 +1,5 @@
 import { usdFromMeters } from "@/lib/costs";
-import { dependentsMap } from "./dag";
+import { ancestorIds, buildFilterPushdownOrder, dependentsMap } from "./dag";
 import { simulate, expectedWaterfallDataCredits, resolveProviderHitRates } from "./simulate";
 import type {
   AnalysisResult,
@@ -7,9 +7,18 @@ import type {
   CsvRow,
   Finding,
   HealthMetrics,
+  RuleId,
   WorkflowDefinition,
   WorkflowStep,
 } from "./types";
+
+export const PLAIN_TITLES: Record<RuleId, string> = {
+  R1: "Filter earlier",
+  R2: "Add a run condition",
+  R3: "Drop unused enrichment",
+  R4: "Reorder email waterfall",
+  R5: "Use AI Formula",
+};
 
 function findIcpFilter(workflow: WorkflowDefinition): WorkflowStep | undefined {
   return workflow.steps.find(
@@ -19,20 +28,25 @@ function findIcpFilter(workflow: WorkflowDefinition): WorkflowStep | undefined {
   );
 }
 
-function paidStepsBeforeFilter(
+function isPaidStep(s: WorkflowStep): boolean {
+  return (
+    s.type !== "filter" &&
+    s.type !== "ai_formula" &&
+    (s.actionCost > 0 || s.dataCreditCost > 0 || s.type === "waterfall")
+  );
+}
+
+/** Paid steps that currently run before the filter and are not required by it. */
+function movablePaidBeforeFilter(
   workflow: WorkflowDefinition,
   filterId: string
 ): WorkflowStep[] {
   const filterIdx = workflow.steps.findIndex((s) => s.id === filterId);
   if (filterIdx < 0) return [];
+  const required = ancestorIds(workflow, filterId);
   return workflow.steps
     .slice(0, filterIdx)
-    .filter(
-      (s) =>
-        s.type !== "filter" &&
-        s.type !== "ai_formula" &&
-        (s.actionCost > 0 || s.dataCreditCost > 0 || s.type === "waterfall")
-    );
+    .filter((s) => isPaidStep(s) && !required.has(s.id));
 }
 
 export function applyRules(
@@ -51,11 +65,12 @@ export function applyRules(
       ? 1 - baseline.icpPassingRows / profile.rowCount
       : 0;
 
-  // --- R1 Filter / condition too late ---
+  // --- R1 Filter / condition too late (dependency-aware) ---
   if (icp) {
-    const earlyPaid = paidStepsBeforeFilter(workflow, icp.id);
-    if (earlyPaid.length && failFrac > 0) {
-      const after = simulate(workflow, rows, profile, { filtersFirst: true });
+    const movable = movablePaidBeforeFilter(workflow, icp.id);
+    if (movable.length && failFrac > 0) {
+      const pushdownOrder = buildFilterPushdownOrder(workflow, icp.id);
+      const after = simulate(workflow, rows, profile, { stepOrder: pushdownOrder });
       const savingsActions = Math.max(0, baseline.actionsUsed - after.actionsUsed);
       const savingsDc = Math.max(
         0,
@@ -64,9 +79,9 @@ export function applyRules(
       if (savingsActions > 0.01 || savingsDc > 0.01) {
         findings.push({
           rule: "R1",
-          title: "Filter / ICP condition too late",
-          summary: `Paid steps run before free ICP filter. Moving ICP earlier avoids charging ~${(failFrac * 100).toFixed(0)}% of rows that fail ICP.`,
-          stepIds: earlyPaid.map((s) => s.id),
+          title: PLAIN_TITLES.R1,
+          summary: `Paid steps run before your free ICP filter. Move the filter earlier (after enrichments it needs) to avoid charging ~${(failFrac * 100).toFixed(0)}% of rows that fail ICP.`,
+          stepIds: movable.map((s) => s.id),
           wasteActions: savingsActions,
           wasteDataCredits: savingsDc,
           wasteUsd: usdFromMeters(savingsActions, savingsDc),
@@ -79,11 +94,11 @@ export function applyRules(
             afterActions: after.actionsUsed,
             beforeDataCredits: baseline.dataCreditsUsed,
             afterDataCredits: after.dataCreditsUsed,
+            suggestedOrder: pushdownOrder,
+            keptBeforeFilter: [...ancestorIds(workflow, icp.id)],
           },
         });
-        const filters = workflow.steps.filter((s) => s.type === "filter").map((s) => s.id);
-        const rest = workflow.steps.filter((s) => s.type !== "filter").map((s) => s.id);
-        suggestedStepOrder = [...filters, ...rest];
+        suggestedStepOrder = pushdownOrder;
       }
     }
   }
@@ -92,25 +107,24 @@ export function applyRules(
   for (const step of workflow.steps) {
     if (!["enrich", "waterfall", "use_ai", "claygent"].includes(step.type)) continue;
     if (step.runCondition) continue;
-    // Heuristic: work email-like lookups should gate on blank target or prior blank
     const looksLikeEmail =
       /email/i.test(step.field) || /email/i.test(step.name);
     if (!looksLikeEmail) continue;
     const fill = profile.columns.find((c) => c.name === step.field)?.fillRate ?? 0;
     if (fill <= 0.05) continue;
 
-    // Recommend: only run email find when contacts exist
+    const suggestedCondition = {
+      field: "Name People",
+      op: "not_blank" as const,
+    };
     const betterGated: WorkflowDefinition = {
       ...workflow,
       steps: workflow.steps.map((s) => {
         if (s.id !== step.id) return s;
-        if (s.id === "validate_email") return s; // already gated
+        if (s.id === "validate_email") return s;
         return {
           ...s,
-          runCondition: {
-            field: "Name People",
-            op: "not_blank" as const,
-          },
+          runCondition: suggestedCondition,
         };
       }),
     };
@@ -120,8 +134,8 @@ export function applyRules(
     if (savingsActions > 0.01 || savingsDc > 0.01) {
       findings.push({
         rule: "R2",
-        title: "Missing run condition on paid lookup",
-        summary: `“${step.name}” should use a run condition (e.g. only if prior contact exists / prior email blank) so conditioned-out rows stay blank at $0.`,
+        title: PLAIN_TITLES.R2,
+        summary: `“${step.name}” should only run when a contact exists, so skipped rows stay blank at $0.`,
         stepIds: [step.id],
         wasteActions: savingsActions,
         wasteDataCredits: savingsDc,
@@ -129,6 +143,7 @@ export function applyRules(
         savingsActions,
         savingsDataCredits: savingsDc,
         savingsUsd: usdFromMeters(savingsActions, savingsDc),
+        details: { suggestedRunCondition: suggestedCondition },
       });
     }
   }
@@ -143,7 +158,6 @@ export function applyRules(
     const downstream = deps.get(step.id) ?? new Set();
     const reachesFinal =
       finalIds.has(step.id) || [...downstream].some((d) => finalIds.has(d));
-    // Also consider depended on by any later non-filter step
     const used = downstream.size > 0 || reachesFinal;
     if (used) continue;
     const simStep = baseline.steps.find((s) => s.stepId === step.id);
@@ -152,8 +166,8 @@ export function applyRules(
     if (wasteA < 0.01 && wasteD < 0.01) continue;
     findings.push({
       rule: "R3",
-      title: "Unused enrichment",
-      summary: `“${step.name}” is never depended on by later steps or export — full step cost is waste.`,
+      title: PLAIN_TITLES.R3,
+      summary: `“${step.name}” is never used by later steps or export — its full cost is waste.`,
       stepIds: [step.id],
       wasteActions: wasteA,
       wasteDataCredits: wasteD,
@@ -187,8 +201,8 @@ export function applyRules(
     suggestedWaterfallOrders[step.id] = newOrder.map((p) => p.id);
     findings.push({
       rule: "R4",
-      title: "Reorder waterfall providers",
-      summary: `Personalize provider order by hit rate per Data Credit. E[cost]/row drops from ${currentE.toFixed(3)} to ${newE.toFixed(3)} DC.`,
+      title: PLAIN_TITLES.R4,
+      summary: `Try providers in hit-rate-per-credit order. Expected cost/row drops from ${currentE.toFixed(3)} to ${newE.toFixed(3)} DC.`,
       stepIds: [step.id],
       wasteActions: 0,
       wasteDataCredits: savingsDc,
@@ -226,8 +240,8 @@ export function applyRules(
     if (wasteA < 0.01 && wasteD < 0.01) continue;
     findings.push({
       rule: "R5",
-      title: "Wrong AI tier — use AI Formula",
-      summary: `“${step.name}” looks like a deterministic transform. Downgrade ${step.type} → ai_formula (free) per Clay’s credit ladder.`,
+      title: PLAIN_TITLES.R5,
+      summary: `“${step.name}” is a simple transform. Switch ${step.type} → AI Formula (free).`,
       stepIds: [step.id],
       wasteActions: wasteA,
       wasteDataCredits: wasteD,
@@ -264,9 +278,9 @@ export function computeMetrics(
   profile: CsvProfile,
   keyFields: string[]
 ): HealthMetrics {
-  const coreWaste = findings.filter((f) => f.rule === "R1" || f.rule === "R2" || f.rule === "R3");
-  const wasteActions = coreWaste.reduce((s, f) => s + f.wasteActions, 0);
-  const wasteDataCredits = coreWaste.reduce((s, f) => s + f.wasteDataCredits, 0);
+  // Include all finding savings so Waste matches the recommendation cards
+  const wasteActions = findings.reduce((s, f) => s + f.wasteActions, 0);
+  const wasteDataCredits = findings.reduce((s, f) => s + f.wasteDataCredits, 0);
 
   const icpEffA =
     simulation.actionsUsed > 0
@@ -317,6 +331,83 @@ export function computeMetrics(
     dataConfidence,
     waterfallEfficiency,
     overallScore,
+  };
+}
+
+/** Apply suggested order, waterfall reorder, run conditions, and AI-tier downgrades. */
+export function buildFixedWorkflow(
+  workflow: WorkflowDefinition,
+  result: AnalysisResult
+): WorkflowDefinition {
+  const byId = new Map(workflow.steps.map((s) => [s.id, s]));
+  const order =
+    result.suggestedStepOrder.length > 0
+      ? result.suggestedStepOrder
+      : workflow.steps.map((s) => s.id);
+
+  const r2Conditions = new Map<string, { field: string; op: "not_blank" | "blank" | "eq" | "neq" | "truthy"; value?: string }>();
+  const r5Steps = new Set<string>();
+  for (const f of result.findings) {
+    if (f.rule === "R2" && f.details?.suggestedRunCondition) {
+      for (const id of f.stepIds) {
+        r2Conditions.set(
+          id,
+          f.details.suggestedRunCondition as {
+            field: string;
+            op: "not_blank" | "blank" | "eq" | "neq" | "truthy";
+            value?: string;
+          }
+        );
+      }
+    }
+    if (f.rule === "R5") {
+      for (const id of f.stepIds) r5Steps.add(id);
+    }
+  }
+
+  const steps = order.map((id) => {
+    const original = byId.get(id);
+    if (!original) throw new Error(`Unknown step in fixed order: ${id}`);
+    let step: WorkflowStep = { ...original, dependsOn: [...original.dependsOn] };
+
+    const waterfallOrder = result.suggestedWaterfallOrders[id];
+    if (waterfallOrder?.length && step.providers) {
+      const map = new Map(step.providers.map((p) => [p.id, p]));
+      step = {
+        ...step,
+        providers: waterfallOrder.map((pid) => {
+          const p = map.get(pid);
+          if (!p) throw new Error(`Unknown provider ${pid}`);
+          return { ...p };
+        }),
+      };
+    }
+
+    const cond = r2Conditions.get(id);
+    if (cond && !step.runCondition) {
+      step = { ...step, runCondition: cond };
+    }
+
+    if (r5Steps.has(id) && (step.type === "use_ai" || step.type === "claygent")) {
+      step = {
+        ...step,
+        type: "ai_formula",
+        actionCost: 0,
+        dataCreditCost: 0,
+        taskClass: "deterministic",
+      };
+    }
+
+    return step;
+  });
+
+  return {
+    ...workflow,
+    name: workflow.name.replace(/\s*—\s*Before\s*$/i, "") + " — Fixed",
+    description:
+      (workflow.description ? workflow.description + " " : "") +
+      "Reordered by Clay Workflow Health (dependency-safe filter pushdown + waterfall + AI tier).",
+    steps,
   };
 }
 
