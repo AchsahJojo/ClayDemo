@@ -479,6 +479,10 @@ export default function HomePage() {
             provider&apos;s data you keep — hard emails stay hard.
           </li>
           <li>
+            Providers overlap in practice; overlap isn&apos;t visible in a CSV export, so
+            reorder savings are estimates.
+          </li>
+          <li>
             $/Action and $/Data Credit are editable inputs (plan-dependent). Step unit
             costs still come from workflow JSON (Usage history).
           </li>
@@ -548,7 +552,9 @@ export default function HomePage() {
 
           {a?.hitRateSource && (
             <p className="mt-2 text-xs text-[var(--muted)]">
-              <strong className="text-[var(--ink)]">Provider hit rates:</strong>{" "}
+              <strong className="text-[var(--ink)]">
+                Estimated hit rate on rows reaching this provider:
+              </strong>{" "}
               {a.hitRateSource === "provider_win_column"
                 ? "from the CSV provider-win column (observed)."
                 : a.hitRateSource === "fill_scaled_estimates"
@@ -556,12 +562,11 @@ export default function HomePage() {
                       (a.emailFillRate ?? 0) * 100
                     ).toFixed(0)}% email fill rate (modeled find ${(
                       (a.modeledFindRate ?? 0) * 100
-                    ).toFixed(0)}%).`
-                  : "from declared JSON rates (no CSV fill signal)."}
+                    ).toFixed(0)}%). These are cascade rates, not shares that add to 100%.`
+                  : "from declared JSON rates (no CSV fill signal). Cascade rates, not shares that add to 100%."}
               {a.providerHitRates && (
                 <>
                   {" "}
-                  Conditional rates:{" "}
                   {Object.entries(a.providerHitRates)
                     .map(([id, r]) => `${id} ${(r * 100).toFixed(1)}%`)
                     .join(" · ")}
