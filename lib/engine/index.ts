@@ -11,11 +11,16 @@ export {
   columnFillRate,
   filterPassRate,
   fieldNotBlankRate,
+  numericRangePassRate,
+  resolveIcpPassRate,
+  csvHasColumn,
 } from "./profile";
 export {
   simulate,
   expectedWaterfallDataCredits,
+  expectedWaterfallActions,
   resolveProviderHitRates,
+  DEFAULT_ICP_RULE,
 } from "./simulate";
 export {
   analyze,

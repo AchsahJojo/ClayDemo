@@ -1,6 +1,6 @@
 {
   "name": "Workflow Health Demo — Before",
-  "description": "Wasteful order: paid enrichments before ICP filter. Costs locked from Clay Usage history.",
+  "description": "Demo table before optimization. Unit costs locked from Clay Usage history; hit rates and ICP pass come from the CSV.",
   "steps": [
     {
       "id": "find_contacts",

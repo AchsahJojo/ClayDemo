@@ -1,12 +1,15 @@
-import { usdFromMeters } from "@/lib/costs";
+import { DEFAULT_PRICES, usdFromMeters, type PriceAssumptions } from "@/lib/costs";
 import { topologicalOrder } from "./dag";
 import {
+  columnFillRate,
   fieldNotBlankRate,
   filterPassRate,
+  resolveIcpPassRate,
 } from "./profile";
 import type {
   CsvProfile,
   CsvRow,
+  IcpRule,
   ProviderSpec,
   SimulationResult,
   StepSimulation,
@@ -14,6 +17,18 @@ import type {
   WorkflowStep,
 } from "./types";
 
+export const DEFAULT_ICP_RULE: IcpRule = {
+  column: "Companyempcount",
+  min: 50,
+  max: 500,
+  preferPassColumn: "ICP Pass",
+};
+
+/**
+ * Expected Data Credits per row with Clay-style refunds:
+ * you only pay a provider's DC when that provider hits.
+ * E[DC] = Σ price_i × P(reach i) × hit_i
+ */
 export function expectedWaterfallDataCredits(
   providers: ProviderSpec[],
   hitRates: number[]
@@ -21,25 +36,53 @@ export function expectedWaterfallDataCredits(
   let missProb = 1;
   let expected = 0;
   for (let i = 0; i < providers.length; i++) {
-    expected += providers[i].dataCreditCost * missProb;
     const hit = hitRates[i] ?? providers[i].hitRate ?? 0;
+    expected += providers[i].dataCreditCost * missProb * hit;
     missProb *= 1 - hit;
   }
   return expected;
 }
 
+/**
+ * Expected Actions per row: each provider attempt that is reached costs Actions
+ * (misses are not refunded on the Action meter).
+ */
+export function expectedWaterfallActions(
+  providers: ProviderSpec[],
+  hitRates: number[],
+  actionCostPerAttempt: number
+): number {
+  let missProb = 1;
+  let expected = 0;
+  for (let i = 0; i < providers.length; i++) {
+    const hit = hitRates[i] ?? providers[i].hitRate ?? 0;
+    expected += actionCostPerAttempt * missProb;
+    missProb *= 1 - hit;
+  }
+  return expected;
+}
+
+/**
+ * Hit rates from CSV when possible:
+ * - provider-win column wins / rowCount when any wins exist
+ * - else scale declared rates to the email/field fill rate from CSV
+ * - else declared JSON rates
+ */
 export function resolveProviderHitRates(
   step: WorkflowStep,
-  profile: CsvProfile
+  profile: CsvProfile,
+  rows?: CsvRow[]
 ): number[] {
   const providers = step.providers ?? [];
   const win = step.providerWinColumn
     ? profile.providerWins.find((p) => p.column === step.providerWinColumn)
     : undefined;
 
-  return providers.map((p) => {
-    if (win) {
-      // Match by provider name/id against win keys (e.g. "Findymail")
+  const hasWins =
+    !!win && Object.values(win.wins).some((count) => count > 0);
+
+  if (hasWins && win) {
+    return providers.map((p) => {
       for (const [name, rate] of Object.entries(win.hitRates)) {
         if (
           name.toLowerCase() === (p.name ?? p.id).toLowerCase() ||
@@ -48,9 +91,25 @@ export function resolveProviderHitRates(
           return rate;
         }
       }
-    }
-    return p.hitRate ?? 0;
-  });
+      return 0;
+    });
+  }
+
+  const fillFromProfile = columnFillRate(profile, step.field);
+  const fillFromRows =
+    rows && rows.length ? fieldNotBlankRate(rows, step.field) : 0;
+  const fill = Math.max(fillFromProfile, fillFromRows);
+
+  const declared = providers.map((p) => p.hitRate ?? 0);
+  const sumDeclared = declared.reduce((a, b) => a + b, 0);
+
+  if (fill > 0 && sumDeclared > 0) {
+    return declared.map((d) => Math.min(1, (d / sumDeclared) * fill));
+  }
+  if (fill > 0) {
+    return providers.map((_, i) => (i === 0 ? fill : 0));
+  }
+  return declared;
 }
 
 function evaluateRunConditionFraction(
@@ -61,7 +120,6 @@ function evaluateRunConditionFraction(
   if (!step.runCondition || rowsReaching <= 0) return 1;
   const { field, op, value } = step.runCondition;
   if (rows.length === 0) {
-    // Fall back to declared rates when no CSV context for condition
     if (op === "not_blank") return 0.7;
     if (op === "blank") return 0.3;
     return 1;
@@ -89,16 +147,14 @@ function evaluateRunConditionFraction(
         break;
     }
   }
-  // Condition evaluated on full table; scale to rows reaching this step
-  // by using the fraction among all rows as estimate for reaching cohort.
   return pass / rows.length;
 }
 
 export interface SimulateOptions {
-  /** Override provider order for waterfall steps (provider ids). */
   waterfallOrders?: Record<string, string[]>;
-  /** Reorder steps (ids) while preserving dependency legality is caller's job. */
   stepOrder?: string[];
+  icpRule?: IcpRule;
+  prices?: PriceAssumptions;
 }
 
 function orderedSteps(
@@ -113,13 +169,21 @@ function orderedSteps(
       return s;
     });
   }
-  // Prefer declared order in JSON (wasteful demo order) when DAG-valid
   try {
     topologicalOrder(workflow);
     return [...workflow.steps];
   } catch {
     return topologicalOrder(workflow);
   }
+}
+
+function isIcpFilter(step: WorkflowStep): boolean {
+  return (
+    step.type === "filter" &&
+    (step.passColumn === "ICP Pass" ||
+      /icp/i.test(step.name) ||
+      /icp/i.test(step.id))
+  );
 }
 
 export function simulate(
@@ -129,12 +193,13 @@ export function simulate(
   opts?: SimulateOptions
 ): SimulationResult {
   const steps = orderedSteps(workflow, opts);
+  const prices = opts?.prices ?? DEFAULT_PRICES;
+  const icpRule = opts?.icpRule ?? DEFAULT_ICP_RULE;
   let rowsFlowing = profile.rowCount || rows.length;
   const stepResults: StepSimulation[] = [];
   let actionsUsed = 0;
   let dataCreditsUsed = 0;
 
-  // Track ICP: if we see a filter with passColumn, record post-filter rows
   let icpPassingRows = rowsFlowing;
   let sawIcpFilter = false;
   let actionsBeforeIcp = 0;
@@ -157,14 +222,16 @@ export function simulate(
     if (step.type === "filter" || step.type === "ai_formula") {
       rowsCharged = 0;
       if (step.type === "filter") {
-        if (step.passColumn && rows.length) {
+        if (isIcpFilter(step) && rows.length) {
+          passRate = resolveIcpPassRate(rows, icpRule).passRate;
+        } else if (step.passColumn && rows.length) {
           passRate = filterPassRate(rows, step.passColumn, step.passValue ?? "true");
         } else {
           passRate = step.passValue ? Number(step.passValue) : 0.5;
           if (Number.isNaN(passRate)) passRate = 0.5;
         }
         rowsFlowing = rowsFlowing * (passRate ?? 1);
-        if (step.passColumn === "ICP Pass" || /icp/i.test(step.name)) {
+        if (isIcpFilter(step)) {
           sawIcpFilter = true;
           icpPassingRows = rowsFlowing;
           pastIcp = true;
@@ -181,29 +248,29 @@ export function simulate(
           return p;
         });
       }
-      const hitRates = resolveProviderHitRates(
-        { ...step, providers },
-        profile
-      );
-      // If order changed, remap hit rates by provider id from original resolve
-      const baseRates = resolveProviderHitRates(step, profile);
+      const baseRates = resolveProviderHitRates(step, profile, rows);
       const baseById = new Map(
         (step.providers ?? []).map((p, i) => [p.id, baseRates[i]])
       );
       const orderedRates = providers.map(
-        (p, i) => baseById.get(p.id) ?? hitRates[i] ?? p.hitRate ?? 0
+        (p) => baseById.get(p.id) ?? p.hitRate ?? 0
       );
 
-      waterfallExpectedPerRow = expectedWaterfallDataCredits(providers, orderedRates);
+      waterfallExpectedPerRow = expectedWaterfallDataCredits(
+        providers,
+        orderedRates
+      );
+      const actionsPerRow = expectedWaterfallActions(
+        providers,
+        orderedRates,
+        step.actionCost
+      );
       providerOrder = providers.map((p) => p.id);
       rowsCharged = rowsEligible;
-      actions = rowsCharged * step.actionCost;
+      actions = rowsCharged * actionsPerRow;
       dataCredits = rowsCharged * waterfallExpectedPerRow;
     } else {
-      // enrich | use_ai | claygent | export
       rowsCharged = rowsEligible;
-      // For validate-like steps with runCondition not_blank on email, rowsEligible already scaled
-      // If no runCondition but field mostly blank, still charge rowsEligible (= rowsFlowing)
       actions = rowsCharged * step.actionCost;
       dataCredits = rowsCharged * step.dataCreditCost;
     }
@@ -235,20 +302,17 @@ export function simulate(
     icpPassingRows = rowsFlowing;
   }
 
-  // ICP efficiency: credits spent on rows that pass ICP / total
-  // Approximation: post-filter spend is fully on ICP rows; pre-filter spend attributed by pass rate
   const passFrac =
     (profile.rowCount || rows.length) > 0
       ? icpPassingRows / (profile.rowCount || rows.length || 1)
       : 1;
-  const actionsOnIcp =
-    actionsBeforeIcp * passFrac + actionsAfterIcpStart;
+  const actionsOnIcp = actionsBeforeIcp * passFrac + actionsAfterIcpStart;
   const dcOnIcp = dcBeforeIcp * passFrac + dcAfterIcpStart;
 
   return {
     actionsUsed,
     dataCreditsUsed,
-    usd: usdFromMeters(actionsUsed, dataCreditsUsed),
+    usd: usdFromMeters(actionsUsed, dataCreditsUsed, prices),
     steps: stepResults,
     rowsAtEnd: rowsFlowing,
     icpPassingRows,
@@ -257,7 +321,6 @@ export function simulate(
   };
 }
 
-/** Estimate how many rows would be charged for validate when email fill is known. */
 export function emailFillFraction(rows: CsvRow[], field = "Work Email"): number {
   return fieldNotBlankRate(rows, field);
 }

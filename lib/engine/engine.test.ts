@@ -2,10 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   analyze,
   buildFixedWorkflow,
+  expectedWaterfallActions,
   expectedWaterfallDataCredits,
   parseCsv,
   parseWorkflow,
   profileCsv,
+  resolveIcpPassRate,
+  resolveProviderHitRates,
   simulate,
   topologicalOrder,
 } from "@/lib/engine";
@@ -115,8 +118,9 @@ function makeRows(): Record<string, string>[] {
   }));
 }
 
-describe("waterfall E[cost]", () => {
-  it("matches hand-worked expected cost per row", () => {
+describe("waterfall E[cost] with DC refunds", () => {
+  it("charges Data Credits only on hits", () => {
+    // 0.5*0.5 + 0.3*0.5*0.4 + 0.2*0.5*0.6*0.25 = 0.325
     const e = expectedWaterfallDataCredits(
       [
         { id: "findymail", dataCreditCost: 0.5, hitRate: 0.5 },
@@ -125,10 +129,25 @@ describe("waterfall E[cost]", () => {
       ],
       [0.5, 0.4, 0.25]
     );
-    expect(e).toBeCloseTo(0.71, 5);
+    expect(e).toBeCloseTo(0.325, 5);
   });
 
-  it("recommends lower E[cost] after hit-per-credit reorder", () => {
+  it("still charges Actions per attempt", () => {
+    // 1 + 0.5 + 0.3 = 1.8
+    const a = expectedWaterfallActions(
+      [
+        { id: "findymail", dataCreditCost: 0.5, hitRate: 0.5 },
+        { id: "prospeo", dataCreditCost: 0.3, hitRate: 0.4 },
+        { id: "hunter", dataCreditCost: 0.2, hitRate: 0.25 },
+      ],
+      [0.5, 0.4, 0.25],
+      1
+    );
+    expect(a).toBeCloseTo(1.8, 5);
+  });
+
+  it("recommends lower E[DC] after hit-per-credit reorder", () => {
+    // 0.3*0.4 + 0.2*0.6*0.25 + 0.5*0.6*0.75*0.5 = 0.2625
     const eNew = expectedWaterfallDataCredits(
       [
         { id: "prospeo", dataCreditCost: 0.3, hitRate: 0.4 },
@@ -137,19 +156,54 @@ describe("waterfall E[cost]", () => {
       ],
       [0.4, 0.25, 0.5]
     );
-    expect(eNew).toBeCloseTo(0.645, 5);
+    expect(eNew).toBeCloseTo(0.2625, 5);
+  });
+});
+
+describe("ICP from CSV", () => {
+  it("falls back to numeric range when ICP Pass column is missing", () => {
+    const rows = makeRows().map((row) => {
+      const next = { ...row };
+      delete next["ICP Pass"];
+      return next;
+    });
+    const resolved = resolveIcpPassRate(rows, {
+      column: "emp",
+      min: 50,
+      max: 500,
+      preferPassColumn: "ICP Pass",
+    });
+    expect(resolved.source).toBe("numeric_range");
+    expect(resolved.passRate).toBe(1); // all emp 100–109
+  });
+
+  it("uses ICP Pass when the column exists", () => {
+    const rows = makeRows();
+    const resolved = resolveIcpPassRate(rows, {
+      column: "emp",
+      min: 50,
+      max: 500,
+      preferPassColumn: "ICP Pass",
+    });
+    expect(resolved.source).toBe("pass_column");
+    expect(resolved.passRate).toBeCloseTo(0.4, 5);
   });
 });
 
 describe("hand example simulation", () => {
-  it("computes dual-meter totals close to whiteboard", () => {
+  it("computes dual-meter totals with refund-aware waterfall", () => {
     const rows = makeRows();
     const profile = profileCsv(rows, handWorkflow);
     const sim = simulate(handWorkflow, rows, profile);
-    // Actions: contacts10 + waterfall10 + validate7 + emp10 + use_ai10 + export4 = 51
-    expect(sim.actionsUsed).toBeCloseTo(51, 5);
-    // DC: 5 + 7.1 + 0.7 + 20 = 32.8
-    expect(sim.dataCreditsUsed).toBeCloseTo(32.8, 5);
+    // Hit rates scale to email fill (7/10) when no provider-win column — CSV-driven.
+    const step = handWorkflow.steps.find((s) => s.id === "work_email")!;
+    const rates = resolveProviderHitRates(step, profile, rows);
+    const eDc = expectedWaterfallDataCredits(step.providers!, rates);
+    const eAct = expectedWaterfallActions(step.providers!, rates, step.actionCost);
+    // contacts10 + waterfall + validate7 + emp10 + use_ai10 + export4
+    expect(sim.actionsUsed).toBeCloseTo(10 + eAct * 10 + 7 + 10 + 10 + 4, 4);
+    // DC: contacts5 + waterfall + validate0.7 + emp20
+    expect(sim.dataCreditsUsed).toBeCloseTo(5 + eDc * 10 + 0.7 + 20, 4);
   });
 
   it("R1 filter-too-late and R4/R5 fire with savings", () => {
@@ -163,7 +217,6 @@ describe("hand example simulation", () => {
     const r1 = result.findings.find((f) => f.rule === "R1")!;
     expect(r1.savingsActions).toBeGreaterThan(0);
     expect(r1.savingsDataCredits).toBeGreaterThan(0);
-    // employee_count feeds ICP — must stay before the filter
     expect(result.suggestedStepOrder.indexOf("employee_count")).toBeLessThan(
       result.suggestedStepOrder.indexOf("icp_filter")
     );
@@ -180,13 +233,25 @@ describe("hand example simulation", () => {
     ]);
   });
 
-  it("buildFixedWorkflow applies order, waterfall, and AI Formula", () => {
+  it("buildFixedWorkflow drops wasteful description and applies fixes", () => {
     const rows = makeRows();
     const profile = profileCsv(rows, handWorkflow);
-    const result = analyze(handWorkflow, rows, profile);
-    const fixed = buildFixedWorkflow(handWorkflow, result);
+    const result = analyze(handWorkflow, rows, profile, {
+      icpGoal: "Series A, 50–500 employees",
+      workflowDescription: "Outbound enrichment table",
+    });
+    const fixed = buildFixedWorkflow(
+      {
+        ...handWorkflow,
+        description: "Wasteful order: paid enrichments before ICP filter.",
+      },
+      result
+    );
     expect(fixed.steps.map((s) => s.id)).toEqual(result.suggestedStepOrder);
     expect(fixed.steps.find((s) => s.id === "title_cleanup")?.type).toBe("ai_formula");
+    expect(fixed.description).not.toMatch(/Wasteful/i);
+    expect(fixed.description).toMatch(/Outbound enrichment table/);
+    expect(fixed.description).toMatch(/ICP goal/);
     const wf = fixed.steps.find((s) => s.id === "work_email");
     expect(wf?.providers?.map((p) => p.id)).toEqual([
       "prospeo",
@@ -197,7 +262,7 @@ describe("hand example simulation", () => {
 });
 
 describe("sample clay export", () => {
-  it("profiles real CSV and finds R1 waste on late ICP", () => {
+  it("profiles CSV and finds R1 waste on late ICP", () => {
     const csv = fs.readFileSync(
       path.join(process.cwd(), "sample/companies.csv"),
       "utf8"
@@ -216,8 +281,9 @@ describe("sample clay export", () => {
     expect(result.metrics.dataCreditsUsed).toBeGreaterThan(0);
     expect(result.findings.some((f) => f.rule === "R1")).toBe(true);
     expect(result.findings.some((f) => f.rule === "R5")).toBe(true);
-    // Dual meters exposed separately
-    expect(result.metrics).toHaveProperty("actionsUsed");
-    expect(result.metrics).toHaveProperty("dataCreditsUsed");
+    expect(result.assumptions.icpSource).toBe("pass_column");
+    // Waterfall DC should be hit-charged (~0.12/row * 30), not attempt-charged (~0.82*30)
+    const wfStep = result.simulation.steps.find((s) => s.stepId === "work_email");
+    expect(wfStep?.waterfallExpectedPerRow).toBeLessThan(0.4);
   });
 });
