@@ -126,3 +126,78 @@ export function fieldNotBlankRate(rows: CsvRow[], field: string): number {
   }
   return n / rows.length;
 }
+
+/** Numeric range pass rate (inclusive). Non-numeric / blank rows fail. */
+export function numericRangePassRate(
+  rows: CsvRow[],
+  column: string,
+  min: number,
+  max: number
+): number {
+  if (rows.length === 0) return 0;
+  let pass = 0;
+  for (const row of rows) {
+    const raw = (row[column] ?? "").replace(/,/g, "").trim();
+    const n = Number(raw);
+    if (!Number.isFinite(n)) continue;
+    if (n >= min && n <= max) pass++;
+  }
+  return pass / rows.length;
+}
+
+export function csvHasColumn(rows: CsvRow[], column: string): boolean {
+  if (!rows.length || !column) return false;
+  return Object.prototype.hasOwnProperty.call(rows[0], column);
+}
+
+export type IcpSource = "pass_column" | "numeric_range" | "fallback";
+
+export interface ResolvedIcpRate {
+  passRate: number;
+  source: IcpSource;
+  columnUsed: string;
+}
+
+/**
+ * Resolve ICP pass rate from CSV:
+ * 1) preferPassColumn when that header exists
+ * 2) else numeric range on rule.column (e.g. employee count 50–500)
+ * 3) else 0 with source fallback (caller should surface this)
+ */
+export function resolveIcpPassRate(
+  rows: CsvRow[],
+  rule: {
+    column: string;
+    min: number;
+    max: number;
+    preferPassColumn?: string;
+  }
+): ResolvedIcpRate {
+  const prefer = rule.preferPassColumn;
+  if (prefer && csvHasColumn(rows, prefer)) {
+    return {
+      passRate: filterPassRate(rows, prefer, "true"),
+      source: "pass_column",
+      columnUsed: prefer,
+    };
+  }
+
+  const candidates = [
+    rule.column,
+    "Companyempcount",
+    "emp",
+    "Employee Count",
+    "employee_count",
+  ].filter(Boolean);
+  for (const col of candidates) {
+    if (csvHasColumn(rows, col)) {
+      return {
+        passRate: numericRangePassRate(rows, col, rule.min, rule.max),
+        source: "numeric_range",
+        columnUsed: col,
+      };
+    }
+  }
+
+  return { passRate: 0, source: "fallback", columnUsed: rule.column };
+}

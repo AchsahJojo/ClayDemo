@@ -29,6 +29,20 @@ export const OBSERVED_USAGE = {
   },
 } as const;
 
-export function usdFromMeters(actions: number, dataCredits: number): number {
-  return actions * ACTION_USD + dataCredits * DATA_CREDIT_USD;
+export interface PriceAssumptions {
+  actionUsd: number;
+  dataCreditUsd: number;
+}
+
+export const DEFAULT_PRICES: PriceAssumptions = {
+  actionUsd: ACTION_USD,
+  dataCreditUsd: DATA_CREDIT_USD,
+};
+
+export function usdFromMeters(
+  actions: number,
+  dataCredits: number,
+  prices: PriceAssumptions = DEFAULT_PRICES
+): number {
+  return actions * prices.actionUsd + dataCredits * prices.dataCreditUsd;
 }

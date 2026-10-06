@@ -8,9 +8,15 @@ export const runtime = "nodejs";
 function templateExplain(result: AnalysisResult): string {
   const m = result.metrics;
   const lines: string[] = [];
+  const a = result.assumptions;
   lines.push(
     `This workflow costs about ${fmtUsd(m.usdPerRun)} per run (${fmtNum(m.actionsUsed)} Actions, ${fmtNum(m.dataCreditsUsed)} Data Credits). About ${fmtUsd(m.wasteUsd)} of that is waste you can fix.`
   );
+  if (a) {
+    lines.push(
+      `ICP pass rate ${(a.icpPassRate * 100).toFixed(0)}% from ${a.icpSource.replace("_", " ")}. Data Credits use Clay-style refunds (charge hits only); Actions still bill per waterfall attempt.`
+    );
+  }
   lines.push("");
   for (const f of result.findings) {
     lines.push(formatFinding(f));

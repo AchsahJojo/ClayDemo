@@ -1,12 +1,21 @@
-import { usdFromMeters } from "@/lib/costs";
+import { DEFAULT_PRICES, usdFromMeters, type PriceAssumptions } from "@/lib/costs";
 import { ancestorIds, buildFilterPushdownOrder, dependentsMap } from "./dag";
-import { simulate, expectedWaterfallDataCredits, resolveProviderHitRates } from "./simulate";
+import { resolveIcpPassRate } from "./profile";
+import {
+  DEFAULT_ICP_RULE,
+  expectedWaterfallDataCredits,
+  resolveProviderHitRates,
+  simulate,
+  type SimulateOptions,
+} from "./simulate";
 import type {
   AnalysisResult,
+  AnalyzeOptions,
   CsvProfile,
   CsvRow,
   Finding,
   HealthMetrics,
+  IcpRule,
   RuleId,
   WorkflowDefinition,
   WorkflowStep,
@@ -49,12 +58,22 @@ function movablePaidBeforeFilter(
     .filter((s) => isPaidStep(s) && !required.has(s.id));
 }
 
+
+type RuleContext = {
+  prices: PriceAssumptions;
+  icpRule: IcpRule;
+  simOpts: SimulateOptions;
+};
+
 export function applyRules(
   workflow: WorkflowDefinition,
   rows: CsvRow[],
   profile: CsvProfile,
-  baseline: ReturnType<typeof simulate>
+  baseline: ReturnType<typeof simulate>,
+  ctx: RuleContext
 ): { findings: Finding[]; suggestedStepOrder: string[]; suggestedWaterfallOrders: Record<string, string[]> } {
+  const { prices, simOpts } = ctx;
+  const usd = (a: number, d: number) => usdFromMeters(a, d, prices);
   const findings: Finding[] = [];
   const suggestedWaterfallOrders: Record<string, string[]> = {};
   let suggestedStepOrder = workflow.steps.map((s) => s.id);
@@ -65,12 +84,14 @@ export function applyRules(
       ? 1 - baseline.icpPassingRows / profile.rowCount
       : 0;
 
-  // --- R1 Filter / condition too late (dependency-aware) ---
   if (icp) {
     const movable = movablePaidBeforeFilter(workflow, icp.id);
     if (movable.length && failFrac > 0) {
       const pushdownOrder = buildFilterPushdownOrder(workflow, icp.id);
-      const after = simulate(workflow, rows, profile, { stepOrder: pushdownOrder });
+      const after = simulate(workflow, rows, profile, {
+        ...simOpts,
+        stepOrder: pushdownOrder,
+      });
       const savingsActions = Math.max(0, baseline.actionsUsed - after.actionsUsed);
       const savingsDc = Math.max(
         0,
@@ -84,10 +105,10 @@ export function applyRules(
           stepIds: movable.map((s) => s.id),
           wasteActions: savingsActions,
           wasteDataCredits: savingsDc,
-          wasteUsd: usdFromMeters(savingsActions, savingsDc),
+          wasteUsd: usd(savingsActions, savingsDc),
           savingsActions,
           savingsDataCredits: savingsDc,
-          savingsUsd: usdFromMeters(savingsActions, savingsDc),
+          savingsUsd: usd(savingsActions, savingsDc),
           details: {
             failFraction: failFrac,
             beforeActions: baseline.actionsUsed,
@@ -103,7 +124,6 @@ export function applyRules(
     }
   }
 
-  // --- R2 Already-has-data / missing conditional ---
   for (const step of workflow.steps) {
     if (!["enrich", "waterfall", "use_ai", "claygent"].includes(step.type)) continue;
     if (step.runCondition) continue;
@@ -122,33 +142,29 @@ export function applyRules(
       steps: workflow.steps.map((s) => {
         if (s.id !== step.id) return s;
         if (s.id === "validate_email") return s;
-        return {
-          ...s,
-          runCondition: suggestedCondition,
-        };
+        return { ...s, runCondition: suggestedCondition };
       }),
     };
-    const after = simulate(betterGated, rows, profile);
+    const after = simulate(betterGated, rows, profile, simOpts);
     const savingsActions = Math.max(0, baseline.actionsUsed - after.actionsUsed);
     const savingsDc = Math.max(0, baseline.dataCreditsUsed - after.dataCreditsUsed);
     if (savingsActions > 0.01 || savingsDc > 0.01) {
       findings.push({
         rule: "R2",
         title: PLAIN_TITLES.R2,
-        summary: `“${step.name}” should only run when a contact exists, so skipped rows stay blank at $0.`,
+        summary: `"${step.name}" should only run when a contact exists, so skipped rows stay blank at $0.`,
         stepIds: [step.id],
         wasteActions: savingsActions,
         wasteDataCredits: savingsDc,
-        wasteUsd: usdFromMeters(savingsActions, savingsDc),
+        wasteUsd: usd(savingsActions, savingsDc),
         savingsActions,
         savingsDataCredits: savingsDc,
-        savingsUsd: usdFromMeters(savingsActions, savingsDc),
+        savingsUsd: usd(savingsActions, savingsDc),
         details: { suggestedRunCondition: suggestedCondition },
       });
     }
   }
 
-  // --- R3 Unused enrich ---
   const deps = dependentsMap(workflow);
   const finalIds = new Set(
     workflow.steps.filter((s) => s.isFinalOutput || s.type === "export").map((s) => s.id)
@@ -167,21 +183,20 @@ export function applyRules(
     findings.push({
       rule: "R3",
       title: PLAIN_TITLES.R3,
-      summary: `“${step.name}” is never used by later steps or export — its full cost is waste.`,
+      summary: `"${step.name}" is never used by later steps or export — its full cost is waste.`,
       stepIds: [step.id],
       wasteActions: wasteA,
       wasteDataCredits: wasteD,
-      wasteUsd: usdFromMeters(wasteA, wasteD),
+      wasteUsd: usd(wasteA, wasteD),
       savingsActions: wasteA,
       savingsDataCredits: wasteD,
-      savingsUsd: usdFromMeters(wasteA, wasteD),
+      savingsUsd: usd(wasteA, wasteD),
     });
   }
 
-  // --- R4 Waterfall reorder ---
   for (const step of workflow.steps) {
     if (step.type !== "waterfall" || !step.providers?.length) continue;
-    const rates = resolveProviderHitRates(step, profile);
+    const rates = resolveProviderHitRates(step, profile, rows);
     const currentE = expectedWaterfallDataCredits(step.providers, rates);
     const scored = step.providers.map((p, i) => ({
       p,
@@ -192,7 +207,8 @@ export function applyRules(
     const newOrder = scored.map((s) => s.p);
     const newRates = scored.map((s) => s.rate);
     const newE = expectedWaterfallDataCredits(newOrder, newRates);
-    const orderChanged = newOrder.map((p) => p.id).join() !== step.providers.map((p) => p.id).join();
+    const orderChanged =
+      newOrder.map((p) => p.id).join() !== step.providers.map((p) => p.id).join();
     if (!orderChanged || newE >= currentE - 1e-6) continue;
 
     const simStep = baseline.steps.find((s) => s.stepId === step.id);
@@ -202,14 +218,14 @@ export function applyRules(
     findings.push({
       rule: "R4",
       title: PLAIN_TITLES.R4,
-      summary: `Try providers in hit-rate-per-credit order. Expected cost/row drops from ${currentE.toFixed(3)} to ${newE.toFixed(3)} DC.`,
+      summary: `Try providers in hit-rate-per-credit order. Expected DC/row (charged on hits only) drops from ${currentE.toFixed(3)} to ${newE.toFixed(3)}.`,
       stepIds: [step.id],
       wasteActions: 0,
       wasteDataCredits: savingsDc,
-      wasteUsd: usdFromMeters(0, savingsDc),
+      wasteUsd: usd(0, savingsDc),
       savingsActions: 0,
       savingsDataCredits: savingsDc,
-      savingsUsd: usdFromMeters(0, savingsDc),
+      savingsUsd: usd(0, savingsDc),
       details: {
         currentOrder: step.providers.map((p) => p.id),
         recommendedOrder: newOrder.map((p) => p.id),
@@ -225,7 +241,6 @@ export function applyRules(
     });
   }
 
-  // --- R5 Wrong AI tier ---
   for (const step of workflow.steps) {
     if (step.type !== "use_ai" && step.type !== "claygent") continue;
     const deterministic =
@@ -241,18 +256,17 @@ export function applyRules(
     findings.push({
       rule: "R5",
       title: PLAIN_TITLES.R5,
-      summary: `“${step.name}” is a simple transform. Switch ${step.type} → AI Formula (free).`,
+      summary: `"${step.name}" is a simple transform. Switch ${step.type} → AI Formula (free).`,
       stepIds: [step.id],
       wasteActions: wasteA,
       wasteDataCredits: wasteD,
-      wasteUsd: usdFromMeters(wasteA, wasteD),
+      wasteUsd: usd(wasteA, wasteD),
       savingsActions: wasteA,
       savingsDataCredits: wasteD,
-      savingsUsd: usdFromMeters(wasteA, wasteD),
+      savingsUsd: usd(wasteA, wasteD),
     });
   }
 
-  // Deduplicate waste R1 > R2 > R3 for overlapping step credits
   const priority: Record<string, number> = { R1: 1, R2: 2, R3: 3 };
   const claimed = new Set<string>();
   const deduped: Finding[] = [];
@@ -276,9 +290,9 @@ export function computeMetrics(
   simulation: ReturnType<typeof simulate>,
   findings: Finding[],
   profile: CsvProfile,
-  keyFields: string[]
+  keyFields: string[],
+  prices: PriceAssumptions = DEFAULT_PRICES
 ): HealthMetrics {
-  // Include all finding savings so Waste matches the recommendation cards
   const wasteActions = findings.reduce((s, f) => s + f.wasteActions, 0);
   const wasteDataCredits = findings.reduce((s, f) => s + f.wasteDataCredits, 0);
 
@@ -325,7 +339,7 @@ export function computeMetrics(
     usdPerRun: simulation.usd,
     wasteActions,
     wasteDataCredits,
-    wasteUsd: usdFromMeters(wasteActions, wasteDataCredits),
+    wasteUsd: usdFromMeters(wasteActions, wasteDataCredits, prices),
     icpEfficiencyActions: icpEffA,
     icpEfficiencyDataCredits: icpEffD,
     dataConfidence,
@@ -345,7 +359,10 @@ export function buildFixedWorkflow(
       ? result.suggestedStepOrder
       : workflow.steps.map((s) => s.id);
 
-  const r2Conditions = new Map<string, { field: string; op: "not_blank" | "blank" | "eq" | "neq" | "truthy"; value?: string }>();
+  const r2Conditions = new Map<
+    string,
+    { field: string; op: "not_blank" | "blank" | "eq" | "neq" | "truthy"; value?: string }
+  >();
   const r5Steps = new Set<string>();
   for (const f of result.findings) {
     if (f.rule === "R2" && f.details?.suggestedRunCondition) {
@@ -401,12 +418,25 @@ export function buildFixedWorkflow(
     return step;
   });
 
+  const goal = result.assumptions.icpGoal?.trim();
+  const userDesc = result.assumptions.workflowDescription?.trim();
+  const icp = result.assumptions.icpRule;
+  const parts = [
+    userDesc,
+    goal ? `ICP goal: ${goal}` : "",
+    `ICP rule: ${icp.column} in [${icp.min}, ${icp.max}] (pass rate ${(result.assumptions.icpPassRate * 100).toFixed(0)}% from ${result.assumptions.icpSource}).`,
+    "Optimized by Clay Workflow Health: dependency-safe filter pushdown, waterfall reorder (Data Credits charged on hits only; Actions per attempt), AI tier fixes.",
+  ].filter(Boolean);
+
+  const baseName = workflow.name
+    .replace(/\s*—\s*Before\s*$/i, "")
+    .replace(/\s*—\s*Fixed\s*$/i, "")
+    .trim();
+
   return {
     ...workflow,
-    name: workflow.name.replace(/\s*—\s*Before\s*$/i, "") + " — Fixed",
-    description:
-      (workflow.description ? workflow.description + " " : "") +
-      "Reordered by Clay Workflow Health (dependency-safe filter pushdown + waterfall + AI tier).",
+    name: `${baseName} — Fixed`,
+    description: parts.join(" "),
     steps,
   };
 }
@@ -414,22 +444,30 @@ export function buildFixedWorkflow(
 export function analyze(
   workflow: WorkflowDefinition,
   rows: CsvRow[],
-  profile: CsvProfile
+  profile: CsvProfile,
+  options: AnalyzeOptions = {}
 ): AnalysisResult {
-  const simulation = simulate(workflow, rows, profile);
+  const prices = options.prices ?? DEFAULT_PRICES;
+  const icpRule = options.icpRule ?? DEFAULT_ICP_RULE;
+  const simOpts: SimulateOptions = { prices, icpRule };
+  const resolvedIcp = resolveIcpPassRate(rows, icpRule);
+
+  const simulation = simulate(workflow, rows, profile, simOpts);
   const { findings, suggestedStepOrder, suggestedWaterfallOrders } = applyRules(
     workflow,
     rows,
     profile,
-    simulation
+    simulation,
+    { prices, icpRule, simOpts }
   );
   const keyFields = [
     "Work Email",
     "Companyempcount",
     "Name People",
     "Company Domain",
-  ];
-  const metrics = computeMetrics(simulation, findings, profile, keyFields);
+    icpRule.column,
+  ].filter((v, i, a) => a.indexOf(v) === i);
+  const metrics = computeMetrics(simulation, findings, profile, keyFields, prices);
   return {
     profile,
     simulation,
@@ -437,5 +475,14 @@ export function analyze(
     findings,
     suggestedStepOrder,
     suggestedWaterfallOrders,
+    assumptions: {
+      actionUsd: prices.actionUsd,
+      dataCreditUsd: prices.dataCreditUsd,
+      icpRule,
+      icpPassRate: resolvedIcp.passRate,
+      icpSource: resolvedIcp.source,
+      icpGoal: options.icpGoal,
+      workflowDescription: options.workflowDescription,
+    },
   };
 }

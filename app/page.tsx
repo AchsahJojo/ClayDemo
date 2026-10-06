@@ -3,10 +3,9 @@
 import { useEffect, useState, useTransition } from "react";
 import type { AnalysisResult, Finding, WorkflowDefinition } from "@/lib/engine";
 import { buildFixedWorkflow, PLAIN_TITLES } from "@/lib/engine";
+import { ACTION_USD, DATA_CREDIT_USD } from "@/lib/costs";
 import { WorkflowGraph, type GraphMode } from "@/components/WorkflowGraph";
-import { fmtNum, fmtUsd } from "@/lib/utils";
-
-const MONTHLY_RUNS = 100;
+import { fmtNum, fmtPct, fmtUsd } from "@/lib/utils";
 
 const EXAMPLE_WORKFLOW = `{
   "name": "My table",
@@ -89,6 +88,17 @@ export default function HomePage() {
   const [highlightIds, setHighlightIds] = useState<string[]>([]);
   const [pending, startTransition] = useTransition();
 
+  const [icpGoal, setIcpGoal] = useState("Companies with 50–500 employees");
+  const [workflowDescription, setWorkflowDescription] = useState(
+    "GTM enrichment table — audit waste after the workflow is defined."
+  );
+  const [icpColumn, setIcpColumn] = useState("Companyempcount");
+  const [icpMin, setIcpMin] = useState(50);
+  const [icpMax, setIcpMax] = useState(500);
+  const [actionUsd, setActionUsd] = useState(ACTION_USD);
+  const [dataCreditUsd, setDataCreditUsd] = useState(DATA_CREDIT_USD);
+  const [monthlyRuns, setMonthlyRuns] = useState(100);
+
   useEffect(() => {
     startTransition(async () => {
       try {
@@ -97,6 +107,9 @@ export default function HomePage() {
         setCsv(data.csv);
         setWorkflowText(JSON.stringify(data.workflow, null, 2));
         setWorkflow(data.workflow);
+        if (data.workflow?.description) {
+          setWorkflowDescription(String(data.workflow.description).replace(/Wasteful[^.]+\.\s*/i, "").trim() || workflowDescription);
+        }
         await runAnalyze(data.csv, JSON.stringify(data.workflow), false);
       } catch {
         setError("Failed to load sample fixtures");
@@ -104,6 +117,22 @@ export default function HomePage() {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  function analyzePayload(csvIn: string, wf: WorkflowDefinition) {
+    return {
+      csv: csvIn,
+      workflow: wf,
+      icpRule: {
+        column: icpColumn,
+        min: icpMin,
+        max: icpMax,
+        preferPassColumn: "ICP Pass",
+      },
+      prices: { actionUsd, dataCreditUsd },
+      icpGoal,
+      workflowDescription,
+    };
+  }
 
   async function runAnalyze(
     csvIn = csv,
@@ -121,7 +150,7 @@ export default function HomePage() {
         setExplanation("");
         setWorkflow(null);
         setError(
-          "That JSON doesn’t look right. Paste a workflow with a name and steps array — here’s an example below."
+          "That JSON doesn't look right. Paste a workflow with a name and steps array — here's an example below."
         );
         return;
       }
@@ -129,7 +158,7 @@ export default function HomePage() {
       const res = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ csv: csvIn, workflow: wf }),
+        body: JSON.stringify(analyzePayload(csvIn, wf)),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -138,7 +167,7 @@ export default function HomePage() {
         setWorkflow(null);
         throw new Error(
           typeof data.error === "string" && /json|zod|parse|required|invalid/i.test(data.error)
-            ? "That JSON doesn’t look right. Paste a workflow with a name and steps array — here’s an example below."
+            ? "That JSON doesn't look right. Paste a workflow with a name and steps array — here's an example below."
             : data.error || "Analyze failed"
         );
       }
@@ -186,10 +215,11 @@ export default function HomePage() {
   }
 
   const m = result?.metrics;
+  const a = result?.assumptions;
   const savePct =
     m && m.usdPerRun > 0 ? Math.round((m.wasteUsd / m.usdPerRun) * 100) : 0;
   const topFinding = result?.findings[0];
-  const monthlyWaste = m ? m.wasteUsd * MONTHLY_RUNS : 0;
+  const monthlyWaste = m ? m.wasteUsd * monthlyRuns : 0;
 
   return (
     <main className="mx-auto max-w-7xl px-4 pb-20 pt-8 sm:px-6">
@@ -204,7 +234,7 @@ export default function HomePage() {
           <div className="mt-5 grid gap-4 lg:grid-cols-[1.4fr_0.6fr]">
             <div>
               <p className="text-lg text-[var(--ink)] sm:text-xl">
-                You’re spending{" "}
+                You&apos;re spending{" "}
                 <strong className="text-[var(--ink)]">{fmtUsd(m.usdPerRun)}</strong> per
                 run.{" "}
                 <strong className="text-[var(--amber)]">{fmtUsd(m.wasteUsd)}</strong> of
@@ -213,23 +243,33 @@ export default function HomePage() {
               <p className="mt-2 text-[var(--muted)]">
                 Clay estimates cost before a run. This finds waste after the workflow is
                 built — paid steps before free filters, bad waterfall order, wrong AI
-                tier.
+                tier. Data Credits are charged on hits only (Clay refunds misses); each
+                waterfall attempt still costs Actions.
               </p>
               {topFinding && (
                 <p className="mt-3 text-sm font-medium text-[var(--teal)]">
                   One-line fix: {plainTitle(topFinding)}.{" "}
                   <span className="font-normal text-[var(--muted)]">
                     {topFinding.rule === "R1"
-                      ? "Move your ICP filter before paid enrichment it doesn’t need."
+                      ? "Move your ICP filter before paid enrichment it doesn't need."
                       : topFinding.summary}
                   </span>
                 </p>
               )}
-              <p className="mt-2 text-sm text-[var(--muted)]">
-                At {MONTHLY_RUNS} runs/mo on this table ≈{" "}
-                <strong className="text-[var(--ink)]">{fmtUsd(monthlyWaste)}/mo</strong>{" "}
-                waste.
-              </p>
+              {a && (
+                <p className="mt-2 text-sm text-[var(--muted)]">
+                  ICP pass rate{" "}
+                  <strong className="text-[var(--ink)]">{fmtPct(a.icpPassRate)}</strong>{" "}
+                  from {a.icpSource === "pass_column"
+                    ? `column “${a.icpRule.preferPassColumn ?? "ICP Pass"}”`
+                    : a.icpSource === "numeric_range"
+                      ? `${a.icpRule.column} in [${a.icpRule.min}, ${a.icpRule.max}]`
+                      : "fallback (no matching CSV column)"}
+                  . At {monthlyRuns} runs/mo ≈{" "}
+                  <strong className="text-[var(--ink)]">{fmtUsd(monthlyWaste)}/mo</strong>{" "}
+                  waste.
+                </p>
+              )}
             </div>
             <div className="flex flex-col justify-center rounded-xl border border-[var(--teal)]/30 bg-[var(--teal-soft)]/60 px-5 py-4 text-center">
               <p className="text-xs uppercase tracking-wide text-[var(--teal)]">
@@ -237,7 +277,7 @@ export default function HomePage() {
               </p>
               <p className="brand text-5xl text-[var(--teal)]">{savePct}%</p>
               <p className="mt-1 text-sm text-[var(--muted)]">
-                of per-run spend on this sample
+                of per-run spend on this analysis
               </p>
             </div>
           </div>
@@ -254,7 +294,7 @@ export default function HomePage() {
             disabled={pending}
             onClick={() => startTransition(() => runAnalyze())}
           >
-            {pending ? "Analyzing…" : "Analyze workflow"}
+            {pending ? "Analyzing…" : "Run demo"}
           </button>
           <button
             type="button"
@@ -292,19 +332,34 @@ export default function HomePage() {
         )}
 
         {reanalyzed && (
-          <p
-            className="mt-3 text-sm font-medium text-[var(--teal)]"
-            role="status"
-          >
+          <p className="mt-3 text-sm font-medium text-[var(--teal)]" role="status">
             Re-analyzed
           </p>
         )}
       </header>
 
+      <div className="mb-6 rounded-xl border border-[var(--amber)]/40 bg-[var(--amber-soft)]/50 p-4 text-sm text-[var(--ink)]">
+        <p className="font-semibold">V1 limitations (call these out first)</p>
+        <ul className="mt-2 list-disc space-y-1 pl-5 text-[var(--muted)]">
+          <li>
+            Hit rates are treated as independent across waterfall providers — hard emails
+            stay hard, so reordering can change which provider&apos;s data you keep.
+          </li>
+          <li>
+            $/Action and $/Data Credit are editable inputs (plan-dependent). Step unit
+            costs still come from workflow JSON (Usage history).
+          </li>
+          <li>
+            Data Credits: charged on hits only (refunds on empty lookups). Actions: still
+            charged per attempt that runs.
+          </li>
+        </ul>
+      </div>
+
       {error && (
         <div className="mb-6 rounded-xl border border-[var(--danger)]/30 bg-rose-50 p-4 text-sm text-[var(--danger)]">
           <p>{error}</p>
-          {/doesn’t look right|JSON/i.test(error) && (
+          {/doesn't look right|JSON/i.test(error) && (
             <pre className="mt-3 max-h-48 overflow-auto rounded-md bg-white/80 p-3 font-mono text-xs text-[var(--ink)]">
               {EXAMPLE_WORKFLOW}
             </pre>
@@ -315,7 +370,7 @@ export default function HomePage() {
       {m && result && (
         <>
           <section
-            className="rise grid gap-3 sm:grid-cols-3"
+            className="rise grid gap-3 sm:grid-cols-2 lg:grid-cols-5"
             style={{ animationDelay: "80ms" }}
           >
             <Metric
@@ -327,22 +382,35 @@ export default function HomePage() {
             <Metric
               label="Waste"
               value={fmtUsd(m.wasteUsd)}
-              hint={`${fmtNum(m.wasteActions)}A / ${fmtNum(m.wasteDataCredits)}DC spent on rows you’d throw away`}
+              hint={`${fmtNum(m.wasteActions)}A / ${fmtNum(m.wasteDataCredits)}DC on rows you'd throw away`}
               fill={m.usdPerRun > 0 ? Math.min(1, m.wasteUsd / m.usdPerRun) : 0}
               accent="amber"
             />
             <Metric
               label="Health score"
               value={`${m.overallScore}`}
-              hint="How efficiently this table spends credits (0–100)"
+              hint="0–100: (1−waste)×55 + ICP-efficiency×25 + data-confidence×20"
               fill={m.overallScore / 100}
               accent="teal"
+            />
+            <Metric
+              label="ICP efficiency"
+              value={fmtPct(m.icpEfficiencyDataCredits)}
+              hint="% of Data Credits spent on rows that pass ICP"
+              fill={m.icpEfficiencyDataCredits}
+            />
+            <Metric
+              label="Data confidence"
+              value={fmtPct(m.dataConfidence)}
+              hint="Fill rate on key fields (email, emp count, name, domain)"
+              fill={m.dataConfidence}
             />
           </section>
 
           <p className="mt-3 text-xs text-[var(--muted)]">
             Blank ≠ paid failure. Skipped vs refunded cannot be told from CSV alone —
-            blanks are reported as ambiguous.
+            blanks are reported as ambiguous. Health score weights waste ratio, how much
+            spend lands on ICP-passing rows, and how complete key columns are.
           </p>
 
           <section
@@ -409,8 +477,8 @@ export default function HomePage() {
                 <div>
                   <h2 className="text-xl">Workflow</h2>
                   <p className="mt-1 text-sm text-[var(--muted)]">
-                    Toggle current vs suggested order. Dependencies stay valid — filters
-                    never jump before enrichments they need.
+                    Click a node for details. Toggle current vs suggested order —
+                    filters never jump before enrichments they need.
                   </p>
                 </div>
                 <div className="flex rounded-md border border-[var(--line)] bg-white p-0.5 text-sm shadow-sm">
@@ -421,9 +489,7 @@ export default function HomePage() {
                         ? "bg-[var(--teal)] font-semibold text-white"
                         : "text-[var(--muted)] hover:text-[var(--ink)]"
                     }`}
-                    onClick={() => {
-                      setGraphMode("before");
-                    }}
+                    onClick={() => setGraphMode("before")}
                   >
                     Current
                   </button>
@@ -434,9 +500,7 @@ export default function HomePage() {
                         ? "bg-[var(--teal)] font-semibold text-white"
                         : "text-[var(--muted)] hover:text-[var(--ink)]"
                     }`}
-                    onClick={() => {
-                      setGraphMode("after");
-                    }}
+                    onClick={() => setGraphMode("after")}
                   >
                     Suggested
                   </button>
@@ -457,6 +521,7 @@ export default function HomePage() {
                     result={result}
                     mode={graphMode}
                     highlightedStepIds={highlightIds}
+                    onSelectSteps={setHighlightIds}
                   />
                 </div>
               )}
@@ -465,15 +530,97 @@ export default function HomePage() {
         </>
       )}
 
-      <details className="rise mt-10 rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4">
+      <details className="rise mt-10 rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4" open>
         <summary className="cursor-pointer text-sm font-semibold">
-          Use your own data
+          Use your own data & assumptions
         </summary>
         <p className="mt-2 text-sm text-[var(--muted)]">
-          Clay doesn’t export native workflow JSON today. Paste a simplified schema (or
-          use the sample). Solutions teams can author it from a table audit. Costs are
-          locked from Clay Usage history in the JSON.
+          Upload a Clay CSV — ICP pass rate and email hit rates are computed from the
+          file (not locked demo JSON). Step unit costs still come from workflow JSON
+          (Usage history). PreferPassColumn “ICP Pass” is used when present; otherwise
+          the numeric ICP rule below.
         </p>
+
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <label className="block text-sm">
+            <span className="font-semibold">ICP goal</span>
+            <input
+              className="mt-1 w-full rounded-md border border-[var(--line)] bg-white/70 px-2 py-1.5"
+              value={icpGoal}
+              onChange={(e) => setIcpGoal(e.target.value)}
+            />
+          </label>
+          <label className="block text-sm">
+            <span className="font-semibold">Workflow description</span>
+            <input
+              className="mt-1 w-full rounded-md border border-[var(--line)] bg-white/70 px-2 py-1.5"
+              value={workflowDescription}
+              onChange={(e) => setWorkflowDescription(e.target.value)}
+            />
+          </label>
+        </div>
+
+        <div className="mt-3 grid gap-3 sm:grid-cols-3">
+          <label className="block text-sm">
+            <span className="font-semibold">ICP column</span>
+            <input
+              className="mt-1 w-full rounded-md border border-[var(--line)] bg-white/70 px-2 py-1.5 font-mono text-xs"
+              value={icpColumn}
+              onChange={(e) => setIcpColumn(e.target.value)}
+            />
+          </label>
+          <label className="block text-sm">
+            <span className="font-semibold">Min employees</span>
+            <input
+              type="number"
+              className="mt-1 w-full rounded-md border border-[var(--line)] bg-white/70 px-2 py-1.5"
+              value={icpMin}
+              onChange={(e) => setIcpMin(Number(e.target.value))}
+            />
+          </label>
+          <label className="block text-sm">
+            <span className="font-semibold">Max employees</span>
+            <input
+              type="number"
+              className="mt-1 w-full rounded-md border border-[var(--line)] bg-white/70 px-2 py-1.5"
+              value={icpMax}
+              onChange={(e) => setIcpMax(Number(e.target.value))}
+            />
+          </label>
+        </div>
+
+        <div className="mt-3 grid gap-3 sm:grid-cols-3">
+          <label className="block text-sm">
+            <span className="font-semibold">$ / Action</span>
+            <input
+              type="number"
+              step="0.0001"
+              className="mt-1 w-full rounded-md border border-[var(--line)] bg-white/70 px-2 py-1.5"
+              value={actionUsd}
+              onChange={(e) => setActionUsd(Number(e.target.value))}
+            />
+          </label>
+          <label className="block text-sm">
+            <span className="font-semibold">$ / Data Credit</span>
+            <input
+              type="number"
+              step="0.001"
+              className="mt-1 w-full rounded-md border border-[var(--line)] bg-white/70 px-2 py-1.5"
+              value={dataCreditUsd}
+              onChange={(e) => setDataCreditUsd(Number(e.target.value))}
+            />
+          </label>
+          <label className="block text-sm">
+            <span className="font-semibold">Runs / month</span>
+            <input
+              type="number"
+              className="mt-1 w-full rounded-md border border-[var(--line)] bg-white/70 px-2 py-1.5"
+              value={monthlyRuns}
+              onChange={(e) => setMonthlyRuns(Number(e.target.value))}
+            />
+          </label>
+        </div>
+
         <div className="mt-4 grid gap-4 md:grid-cols-2">
           <label className="block">
             <span className="text-sm font-semibold">Clay CSV export</span>
@@ -517,51 +664,29 @@ export default function HomePage() {
           aria-expanded={showHow}
         >
           <h2 className="text-lg font-semibold">How it works</h2>
-          <span className="text-sm text-[var(--muted)]">
-            {showHow ? "Hide" : "Show"}
-          </span>
+          <span className="text-sm text-[var(--muted)]">{showHow ? "Hide" : "Show"}</span>
         </button>
         {showHow && (
           <div className="mt-4 space-y-4 text-sm leading-relaxed text-[var(--muted)]">
             <p>
               <strong className="text-[var(--ink)]">Stack:</strong> Next.js + React Flow.
-              The workflow is a dependency graph. We apply a classic database idea —
-              run cheap filters before expensive steps (predicate pushdown) — then
-              reorder waterfalls by expected cost per row.
+              Deterministic engine for meters; AI only narrates. Predicate pushdown moves
+              free filters as early as their dependencies allow.
             </p>
             <dl className="space-y-3">
               <div>
-                <dt className="font-semibold text-[var(--ink)]">Who’s it for?</dt>
+                <dt className="font-semibold text-[var(--ink)]">Do you charge for misses?</dt>
                 <dd>
-                  RevOps builders and Clay Solutions teams auditing customer tables.
+                  No on Data Credits — Clay refunds empty lookups, so E[DC] only counts
+                  provider hits. Yes on Actions — each attempt that runs still costs an
+                  Action.
                 </dd>
               </div>
               <div>
-                <dt className="font-semibold text-[var(--ink)]">
-                  Where do step costs and hit rates come from?
-                </dt>
+                <dt className="font-semibold text-[var(--ink)]">Where do rates come from?</dt>
                 <dd>
-                  Unit costs are locked from Clay Usage history in the workflow JSON.
-                  Hit rates come from CSV provider-win columns when present, otherwise
-                  declared rates.
-                </dd>
-              </div>
-              <div>
-                <dt className="font-semibold text-[var(--ink)]">
-                  Why not a lint inside Clay?
-                </dt>
-                <dd>
-                  That’s the ideal end state. This demo proves the savings externally
-                  first — then productize as “this enrichment runs before your filter.”
-                </dd>
-              </div>
-              <div>
-                <dt className="font-semibold text-[var(--ink)]">
-                  Does reordering ever change results?
-                </dt>
-                <dd>
-                  Only if a filter depends on an enriched field. We keep those ancestors
-                  before the filter and only move independent paid steps after it.
+                  Provider-win columns and email fill from your CSV; ICP from “ICP Pass”
+                  or your numeric rule. Unit costs stay in workflow JSON.
                 </dd>
               </div>
             </dl>
@@ -581,6 +706,7 @@ export default function HomePage() {
           <pre className="mt-3 max-h-96 overflow-auto text-xs leading-relaxed">
             {JSON.stringify(
               {
+                assumptions: result.assumptions,
                 metrics: result.metrics,
                 findings: result.findings,
                 simulationSteps: result.simulation.steps,

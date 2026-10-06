@@ -1,3 +1,7 @@
+import type { PriceAssumptions } from "@/lib/costs";
+
+export type { PriceAssumptions };
+
 export type StepType =
   | "enrich"
   | "waterfall"
@@ -127,6 +131,33 @@ export interface HealthMetrics {
   overallScore: number;
 }
 
+/** User-editable ICP rule. Prefer pass column when present; else numeric range on CSV. */
+export interface IcpRule {
+  column: string;
+  min: number;
+  max: number;
+  preferPassColumn?: string;
+}
+
+export interface AnalyzeOptions {
+  icpRule?: IcpRule;
+  prices?: PriceAssumptions;
+  /** Free-text ICP goal shown in UI / export. */
+  icpGoal?: string;
+  /** Free-text workflow description for export. */
+  workflowDescription?: string;
+}
+
+export interface AnalysisAssumptions {
+  actionUsd: number;
+  dataCreditUsd: number;
+  icpRule: IcpRule;
+  icpPassRate: number;
+  icpSource: "pass_column" | "numeric_range" | "fallback";
+  icpGoal?: string;
+  workflowDescription?: string;
+}
+
 export interface AnalysisResult {
   profile: CsvProfile;
   simulation: SimulationResult;
@@ -134,4 +165,5 @@ export interface AnalysisResult {
   findings: Finding[];
   suggestedStepOrder: string[];
   suggestedWaterfallOrders: Record<string, string[]>;
+  assumptions: AnalysisAssumptions;
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ReactFlow,
   Background,
@@ -10,6 +10,7 @@ import {
   ReactFlowProvider,
   type Edge,
   type Node,
+  type NodeMouseHandler,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import type { AnalysisResult, WorkflowDefinition } from "@/lib/engine";
@@ -21,6 +22,7 @@ interface Props {
   result: AnalysisResult;
   mode: GraphMode;
   highlightedStepIds?: string[];
+  onSelectSteps?: (stepIds: string[]) => void;
 }
 
 const TYPE_COLOR: Record<string, string> = {
@@ -58,11 +60,18 @@ function GraphInner({
   result,
   mode,
   highlightedStepIds = [],
+  onSelectSteps,
 }: Props) {
   const highlight = useMemo(
     () => new Set(highlightedStepIds),
     [highlightedStepIds]
   );
+  const [tooltip, setTooltip] = useState<{
+    x: number;
+    y: number;
+    title: string;
+    body: string;
+  } | null>(null);
 
   const { nodes, edges } = useMemo(() => {
     const order =
@@ -84,6 +93,18 @@ function GraphInner({
             : step.providers.map((p) => p.id)
           : null;
       const providers = providerIds ? `\n[${providerIds.join(" → ")}]` : "";
+      const tip = [
+        `${step.name} (${step.type})`,
+        sim
+          ? `${sim.actionsUsed.toFixed(1)} Actions · ${sim.dataCreditsUsed.toFixed(1)} DC`
+          : "",
+        step.dependsOn.length ? `dependsOn: ${step.dependsOn.join(", ")}` : "no deps",
+        providerIds ? `providers: ${providerIds.join(" → ")}` : "",
+        `unit: ${step.actionCost}A / ${step.dataCreditCost}DC per cell`,
+      ]
+        .filter(Boolean)
+        .join("\n");
+
       return {
         id: step.id,
         position: {
@@ -92,6 +113,7 @@ function GraphInner({
         },
         data: {
           label: `${step.name}\n${step.type}${sim ? `\n${sim.actionsUsed.toFixed(1)}A / ${sim.dataCreditsUsed.toFixed(1)}DC` : ""}${providers}`,
+          tooltip: tip,
         },
         style: {
           border: highlight.has(step.id)
@@ -110,6 +132,7 @@ function GraphInner({
           boxShadow: highlight.has(step.id)
             ? "0 0 0 3px rgba(15,118,110,0.25)"
             : undefined,
+          cursor: "pointer",
         },
       };
     });
@@ -156,8 +179,32 @@ function GraphInner({
     return { nodes, edges };
   }, [workflow, result, mode, highlight]);
 
+  const onNodeClick: NodeMouseHandler = (_event, node) => {
+    onSelectSteps?.([node.id]);
+  };
+
+  const onNodeMouseEnter: NodeMouseHandler = (event, node) => {
+    const tip = String(node.data?.tooltip ?? node.data?.label ?? "");
+    const title = String(node.data?.label ?? node.id).split("\n")[0];
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    const parent = (event.currentTarget as HTMLElement).closest(
+      ".workflow-graph-root"
+    ) as HTMLElement | null;
+    const pref = parent?.getBoundingClientRect();
+    setTooltip({
+      x: rect.left - (pref?.left ?? 0) + rect.width / 2,
+      y: rect.top - (pref?.top ?? 0) - 8,
+      title,
+      body: tip,
+    });
+  };
+
+  const onNodeMouseLeave: NodeMouseHandler = () => {
+    setTooltip(null);
+  };
+
   return (
-    <div className="h-[420px] w-full overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--panel)]">
+    <div className="workflow-graph-root relative h-[420px] w-full overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--panel)]">
       <ReactFlow
         key={`${mode}-${[...highlight].sort().join(",")}`}
         nodes={nodes}
@@ -169,7 +216,10 @@ function GraphInner({
         maxZoom={1.2}
         nodesDraggable={false}
         nodesConnectable={false}
-        elementsSelectable={false}
+        elementsSelectable
+        onNodeClick={onNodeClick}
+        onNodeMouseEnter={onNodeMouseEnter}
+        onNodeMouseLeave={onNodeMouseLeave}
       >
         <Background gap={18} color="#e7e0d4" />
         <Controls showInteractive={false} />
@@ -179,6 +229,17 @@ function GraphInner({
           nodeCount={nodes.length}
         />
       </ReactFlow>
+      {tooltip && (
+        <div
+          className="pointer-events-none absolute z-10 max-w-xs -translate-x-1/2 -translate-y-full rounded-md border border-[var(--line)] bg-[#1c1917] px-3 py-2 text-xs text-[#f5f5f4] shadow-lg"
+          style={{ left: tooltip.x, top: tooltip.y }}
+        >
+          <p className="font-semibold text-[#ccfbf1]">{tooltip.title}</p>
+          <pre className="mt-1 whitespace-pre-wrap font-sans text-[#d6d3d1]">
+            {tooltip.body}
+          </pre>
+        </div>
+      )}
     </div>
   );
 }
