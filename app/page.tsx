@@ -1,11 +1,18 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import type { AnalysisResult, Finding, WorkflowDefinition } from "@/lib/engine";
 import { buildFixedWorkflow, PLAIN_TITLES } from "@/lib/engine";
 import { ACTION_USD, DATA_CREDIT_USD } from "@/lib/costs";
 import { WorkflowGraph, type GraphMode } from "@/components/WorkflowGraph";
 import { fmtNum, fmtPct, fmtUsd } from "@/lib/utils";
+
+const DEFAULT_ICP_GOAL = "Companies with 50–500 employees";
+const DEFAULT_WF_DESC =
+  "GTM enrichment table — audit waste after the workflow is defined.";
+const DEFAULT_ICP_COLUMN = "Companyempcount";
+const DEFAULT_ICP_MIN = 50;
+const DEFAULT_ICP_MAX = 500;
 
 const EXAMPLE_WORKFLOW = `{
   "name": "My table",
@@ -88,29 +95,61 @@ export default function HomePage() {
   const [highlightIds, setHighlightIds] = useState<string[]>([]);
   const [pending, startTransition] = useTransition();
 
-  const [icpGoal, setIcpGoal] = useState("Companies with 50–500 employees");
-  const [workflowDescription, setWorkflowDescription] = useState(
-    "GTM enrichment table — audit waste after the workflow is defined."
-  );
-  const [icpColumn, setIcpColumn] = useState("Companyempcount");
-  const [icpMin, setIcpMin] = useState(50);
-  const [icpMax, setIcpMax] = useState(500);
+  const [icpGoal, setIcpGoal] = useState(DEFAULT_ICP_GOAL);
+  const [workflowDescription, setWorkflowDescription] = useState(DEFAULT_WF_DESC);
+  const [icpColumn, setIcpColumn] = useState(DEFAULT_ICP_COLUMN);
+  const [icpMin, setIcpMin] = useState(DEFAULT_ICP_MIN);
+  const [icpMax, setIcpMax] = useState(DEFAULT_ICP_MAX);
   const [actionUsd, setActionUsd] = useState(ACTION_USD);
   const [dataCreditUsd, setDataCreditUsd] = useState(DATA_CREDIT_USD);
   const [monthlyRuns, setMonthlyRuns] = useState(100);
+  const [exportNote, setExportNote] = useState("");
+
+  const sampleRef = useRef<{ csv: string; workflow: WorkflowDefinition } | null>(
+    null
+  );
+  const assumptionsRef = useRef({
+    icpGoal: DEFAULT_ICP_GOAL,
+    workflowDescription: DEFAULT_WF_DESC,
+    icpColumn: DEFAULT_ICP_COLUMN,
+    icpMin: DEFAULT_ICP_MIN,
+    icpMax: DEFAULT_ICP_MAX,
+    actionUsd: ACTION_USD,
+    dataCreditUsd: DATA_CREDIT_USD,
+  });
+  assumptionsRef.current = {
+    icpGoal,
+    workflowDescription,
+    icpColumn,
+    icpMin,
+    icpMax,
+    actionUsd,
+    dataCreditUsd,
+  };
 
   useEffect(() => {
     startTransition(async () => {
       try {
         const res = await fetch("/api/sample");
         const data = await res.json();
+        sampleRef.current = { csv: data.csv, workflow: data.workflow };
+        const wfText = JSON.stringify(data.workflow, null, 2);
         setCsv(data.csv);
-        setWorkflowText(JSON.stringify(data.workflow, null, 2));
+        setWorkflowText(wfText);
         setWorkflow(data.workflow);
-        if (data.workflow?.description) {
-          setWorkflowDescription(String(data.workflow.description).replace(/Wasteful[^.]+\.\s*/i, "").trim() || workflowDescription);
-        }
-        await runAnalyze(data.csv, JSON.stringify(data.workflow), false);
+        const desc = String(data.workflow?.description ?? "")
+          .replace(/Wasteful[^.]+\.\s*/i, "")
+          .trim();
+        if (desc) setWorkflowDescription(desc);
+        await runAnalyze(data.csv, wfText, false, {
+          icpGoal: DEFAULT_ICP_GOAL,
+          workflowDescription: desc || DEFAULT_WF_DESC,
+          icpColumn: DEFAULT_ICP_COLUMN,
+          icpMin: DEFAULT_ICP_MIN,
+          icpMax: DEFAULT_ICP_MAX,
+          actionUsd: ACTION_USD,
+          dataCreditUsd: DATA_CREDIT_USD,
+        });
       } catch {
         setError("Failed to load sample fixtures");
       }
@@ -118,29 +157,46 @@ export default function HomePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function analyzePayload(csvIn: string, wf: WorkflowDefinition) {
+  type AnalyzeOverrides = {
+    icpGoal?: string;
+    workflowDescription?: string;
+    icpColumn?: string;
+    icpMin?: number;
+    icpMax?: number;
+    actionUsd?: number;
+    dataCreditUsd?: number;
+  };
+
+  function analyzePayload(
+    csvIn: string,
+    wf: WorkflowDefinition,
+    overrides?: AnalyzeOverrides
+  ) {
+    const a = { ...assumptionsRef.current, ...overrides };
     return {
       csv: csvIn,
       workflow: wf,
       icpRule: {
-        column: icpColumn,
-        min: icpMin,
-        max: icpMax,
+        column: a.icpColumn,
+        min: a.icpMin,
+        max: a.icpMax,
         preferPassColumn: "ICP Pass",
       },
-      prices: { actionUsd, dataCreditUsd },
-      icpGoal,
-      workflowDescription,
+      prices: { actionUsd: a.actionUsd, dataCreditUsd: a.dataCreditUsd },
+      icpGoal: a.icpGoal,
+      workflowDescription: a.workflowDescription,
     };
   }
 
   async function runAnalyze(
-    csvIn = csv,
-    wfIn = workflowText,
-    showConfirm = true
+    csvIn: string,
+    wfIn: string,
+    showConfirm = true,
+    overrides?: AnalyzeOverrides
   ) {
     setError("");
     setReanalyzed(false);
+    setExportNote("");
     try {
       let wf: WorkflowDefinition;
       try {
@@ -158,7 +214,7 @@ export default function HomePage() {
       const res = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(analyzePayload(csvIn, wf)),
+        body: JSON.stringify(analyzePayload(csvIn, wf, overrides)),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -166,7 +222,8 @@ export default function HomePage() {
         setExplanation("");
         setWorkflow(null);
         throw new Error(
-          typeof data.error === "string" && /json|zod|parse|required|invalid/i.test(data.error)
+          typeof data.error === "string" &&
+            /json|zod|parse|required|invalid/i.test(data.error)
             ? "That JSON doesn't look right. Paste a workflow with a name and steps array — here's an example below."
             : data.error || "Analyze failed"
         );
@@ -192,6 +249,48 @@ export default function HomePage() {
     }
   }
 
+  /** Reload original sample fixtures + default assumptions (clean live demo). */
+  async function runDemo() {
+    setError("");
+    try {
+      let sample = sampleRef.current;
+      if (!sample) {
+        const res = await fetch("/api/sample");
+        const data = await res.json();
+        sample = { csv: data.csv, workflow: data.workflow };
+        sampleRef.current = sample;
+      }
+      const wfText = JSON.stringify(sample.workflow, null, 2);
+      const desc = String(sample.workflow?.description ?? "")
+        .replace(/Wasteful[^.]+\.\s*/i, "")
+        .trim();
+      setCsv(sample.csv);
+      setWorkflowText(wfText);
+      setWorkflow(sample.workflow);
+      setIcpGoal(DEFAULT_ICP_GOAL);
+      setWorkflowDescription(desc || DEFAULT_WF_DESC);
+      setIcpColumn(DEFAULT_ICP_COLUMN);
+      setIcpMin(DEFAULT_ICP_MIN);
+      setIcpMax(DEFAULT_ICP_MAX);
+      setActionUsd(ACTION_USD);
+      setDataCreditUsd(DATA_CREDIT_USD);
+      setMonthlyRuns(100);
+      setShowEngine(false);
+      setShowGptPanel(false);
+      await runAnalyze(sample.csv, wfText, true, {
+        icpGoal: DEFAULT_ICP_GOAL,
+        workflowDescription: desc || DEFAULT_WF_DESC,
+        icpColumn: DEFAULT_ICP_COLUMN,
+        icpMin: DEFAULT_ICP_MIN,
+        icpMax: DEFAULT_ICP_MAX,
+        actionUsd: ACTION_USD,
+        dataCreditUsd: DATA_CREDIT_USD,
+      });
+    } catch {
+      setError("Failed to reload demo sample");
+    }
+  }
+
   function onCsvFile(file: File | null) {
     if (!file) return;
     const reader = new FileReader();
@@ -200,18 +299,32 @@ export default function HomePage() {
   }
 
   function exportFixed() {
-    if (!workflow || !result) return;
-    const fixed = buildFixedWorkflow(workflow, result);
-    const text = JSON.stringify(fixed, null, 2);
-    const blob = new Blob([text], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "workflow-fixed.json";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+    if (!workflow || !result) {
+      setExportNote("Nothing to export yet — run an analysis first.");
+      return;
+    }
+    try {
+      const fixed = buildFixedWorkflow(workflow, result);
+      const text = JSON.stringify(fixed, null, 2);
+      const blob = new Blob([text], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "workflow-fixed.json";
+      a.rel = "noopener";
+      a.style.display = "none";
+      document.body.appendChild(a);
+      a.click();
+      setExportNote("Download started: workflow-fixed.json");
+      setTimeout(() => {
+        a.remove();
+        URL.revokeObjectURL(url);
+      }, 2000);
+    } catch (e) {
+      setExportNote(
+        e instanceof Error ? e.message : "Export failed — try another browser."
+      );
+    }
   }
 
   const m = result?.metrics;
@@ -290,9 +403,10 @@ export default function HomePage() {
 
         <div className="mt-5 flex flex-wrap gap-3">
           <button
+            type="button"
             className="rounded-md bg-[var(--teal)] px-4 py-2 text-sm font-semibold text-white transition hover:brightness-110 disabled:opacity-60"
             disabled={pending}
-            onClick={() => startTransition(() => runAnalyze())}
+            onClick={() => startTransition(() => runDemo())}
           >
             {pending ? "Analyzing…" : "Run demo"}
           </button>
@@ -303,6 +417,23 @@ export default function HomePage() {
             onClick={() => setShowGptPanel((v) => !v)}
           >
             Why not GPT?
+          </button>
+          <button
+            type="button"
+            className="rounded-md border border-[var(--line)] bg-[var(--panel)] px-4 py-2 text-sm font-medium"
+            aria-expanded={showEngine}
+            disabled={!result}
+            onClick={() => {
+              setShowEngine((v) => !v);
+              queueMicrotask(() => {
+                document.getElementById("engine-json")?.scrollIntoView({
+                  behavior: "smooth",
+                  block: "start",
+                });
+              });
+            }}
+          >
+            {showEngine ? "Hide engine JSON" : "Show engine JSON"}
           </button>
           {result && (
             <button
@@ -319,16 +450,17 @@ export default function HomePage() {
           <div className="mt-4 rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4">
             <p className="text-sm leading-relaxed text-[var(--ink)]">
               Cost math must be exact and repeatable. A deterministic engine computes
-              Actions, Data Credits, and savings. AI only writes the explanation.
+              Actions, Data Credits, and savings. AI only writes the explanation. Use
+              <strong className="text-[var(--ink)]"> Show engine JSON</strong> for the
+              proof.
             </p>
-            <button
-              type="button"
-              className="mt-3 text-sm font-medium text-[var(--teal)] underline-offset-2 hover:underline"
-              onClick={() => setShowEngine((v) => !v)}
-            >
-              {showEngine ? "Hide engine JSON" : "Show engine JSON"}
-            </button>
           </div>
+        )}
+
+        {exportNote && (
+          <p className="mt-3 text-sm font-medium text-[var(--teal)]" role="status">
+            {exportNote}
+          </p>
         )}
 
         {reanalyzed && (
@@ -342,8 +474,9 @@ export default function HomePage() {
         <p className="font-semibold">V1 limitations (call these out first)</p>
         <ul className="mt-2 list-disc space-y-1 pl-5 text-[var(--muted)]">
           <li>
-            Hit rates are treated as independent across waterfall providers — hard emails
-            stay hard, so reordering can change which provider&apos;s data you keep.
+            Without a provider-win column, per-provider rates are estimates scaled to email
+            fill (overall find rate matches the CSV). Reordering can still change which
+            provider&apos;s data you keep — hard emails stay hard.
           </li>
           <li>
             $/Action and $/Data Credit are editable inputs (plan-dependent). Step unit
@@ -389,7 +522,7 @@ export default function HomePage() {
             <Metric
               label="Health score"
               value={`${m.overallScore}`}
-              hint="0–100: (1−waste)×55 + ICP-efficiency×25 + data-confidence×20"
+              hint="V1 defaults: waste 55 · ICP efficiency 25 · data confidence 20 — tune with real customer data"
               fill={m.overallScore / 100}
               accent="teal"
             />
@@ -409,9 +542,34 @@ export default function HomePage() {
 
           <p className="mt-3 text-xs text-[var(--muted)]">
             Blank ≠ paid failure. Skipped vs refunded cannot be told from CSV alone —
-            blanks are reported as ambiguous. Health score weights waste ratio, how much
-            spend lands on ICP-passing rows, and how complete key columns are.
+            blanks are reported as ambiguous. Health score weights (55 / 25 / 20) are V1
+            defaults I&apos;d tune with real customer data.
           </p>
+
+          {a?.hitRateSource && (
+            <p className="mt-2 text-xs text-[var(--muted)]">
+              <strong className="text-[var(--ink)]">Provider hit rates:</strong>{" "}
+              {a.hitRateSource === "provider_win_column"
+                ? "from the CSV provider-win column (observed)."
+                : a.hitRateSource === "fill_scaled_estimates"
+                  ? `estimates — no provider-win column, so declared JSON shares were scaled to the ${(
+                      (a.emailFillRate ?? 0) * 100
+                    ).toFixed(0)}% email fill rate (modeled find ${(
+                      (a.modeledFindRate ?? 0) * 100
+                    ).toFixed(0)}%).`
+                  : "from declared JSON rates (no CSV fill signal)."}
+              {a.providerHitRates && (
+                <>
+                  {" "}
+                  Conditional rates:{" "}
+                  {Object.entries(a.providerHitRates)
+                    .map(([id, r]) => `${id} ${(r * 100).toFixed(1)}%`)
+                    .join(" · ")}
+                  .
+                </>
+              )}
+            </p>
+          )}
 
           <section
             className="rise mt-8 grid gap-6 lg:grid-cols-[1.05fr_0.95fr]"
@@ -648,12 +806,19 @@ export default function HomePage() {
           </label>
         </div>
         <button
+          type="button"
           className="mt-4 rounded-md bg-[var(--teal)] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
           disabled={pending}
-          onClick={() => startTransition(() => runAnalyze())}
+          onClick={() =>
+            startTransition(() => runAnalyze(csv, workflowText, true))
+          }
         >
           {pending ? "Analyzing…" : "Analyze with my data"}
         </button>
+        <p className="mt-2 text-xs text-[var(--muted)]">
+          Uses the CSV and workflow JSON in the boxes above (not the sample), plus the
+          ICP rule and price inputs.
+        </p>
       </details>
 
       <section className="mt-10 rounded-xl border border-[var(--line)] bg-[var(--panel)] p-5">

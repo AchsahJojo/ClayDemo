@@ -2,9 +2,10 @@ import { DEFAULT_PRICES, usdFromMeters, type PriceAssumptions } from "@/lib/cost
 import { ancestorIds, buildFilterPushdownOrder, dependentsMap } from "./dag";
 import { resolveIcpPassRate } from "./profile";
 import {
+  absoluteWinsToConditional,
   DEFAULT_ICP_RULE,
   expectedWaterfallDataCredits,
-  resolveProviderHitRates,
+  resolveProviderHitRatesDetailed,
   simulate,
   type SimulateOptions,
 } from "./simulate";
@@ -196,16 +197,33 @@ export function applyRules(
 
   for (const step of workflow.steps) {
     if (step.type !== "waterfall" || !step.providers?.length) continue;
-    const rates = resolveProviderHitRates(step, profile, rows);
+    const resolved = resolveProviderHitRatesDetailed(step, profile, rows);
+    const rates = resolved.conditional;
     const currentE = expectedWaterfallDataCredits(step.providers, rates);
-    const scored = step.providers.map((p, i) => ({
-      p,
-      rate: rates[i] ?? p.hitRate ?? 0,
-      score: (rates[i] ?? p.hitRate ?? 0) / Math.max(p.dataCreditCost, 1e-9),
-    }));
+    // Rank by absolute win-share / DC when available (stable across order).
+    const scored = step.providers.map((p, i) => {
+      const absolute = resolved.absolute[i];
+      const rankRate =
+        absolute != null && resolved.absolute.length
+          ? absolute
+          : rates[i] ?? p.hitRate ?? 0;
+      return {
+        p,
+        rate: rates[i] ?? p.hitRate ?? 0,
+        absolute: absolute ?? 0,
+        score: rankRate / Math.max(p.dataCreditCost, 1e-9),
+      };
+    });
     scored.sort((a, b) => b.score - a.score);
     const newOrder = scored.map((s) => s.p);
-    const newRates = scored.map((s) => s.rate);
+    const absById = new Map(
+      step.providers.map((p, i) => [p.id, resolved.absolute[i] ?? 0])
+    );
+    const newAbsolute = newOrder.map((p) => absById.get(p.id) ?? 0);
+    const newRates =
+      resolved.absolute.length > 0
+        ? absoluteWinsToConditional(newAbsolute)
+        : scored.map((s) => s.rate);
     const newE = expectedWaterfallDataCredits(newOrder, newRates);
     const orderChanged =
       newOrder.map((p) => p.id).join() !== step.providers.map((p) => p.id).join();
@@ -215,10 +233,14 @@ export function applyRules(
     const rowsCharged = simStep?.rowsCharged ?? profile.rowCount;
     const savingsDc = (currentE - newE) * rowsCharged;
     suggestedWaterfallOrders[step.id] = newOrder.map((p) => p.id);
+    const estimateNote =
+      resolved.source === "fill_scaled_estimates"
+        ? ` Rates are estimates scaled to the ${(resolved.emailFillRate * 100).toFixed(0)}% email fill (no provider-win column).`
+        : "";
     findings.push({
       rule: "R4",
       title: PLAIN_TITLES.R4,
-      summary: `Try providers in hit-rate-per-credit order. Expected DC/row (charged on hits only) drops from ${currentE.toFixed(3)} to ${newE.toFixed(3)}.`,
+      summary: `Try providers in hit-rate-per-credit order. Expected DC/row (charged on hits only) drops from ${currentE.toFixed(3)} to ${newE.toFixed(3)}.${estimateNote}`,
       stepIds: [step.id],
       wasteActions: 0,
       wasteDataCredits: savingsDc,
@@ -231,9 +253,13 @@ export function applyRules(
         recommendedOrder: newOrder.map((p) => p.id),
         currentExpectedPerRow: currentE,
         recommendedExpectedPerRow: newE,
+        hitRateSource: resolved.source,
+        emailFillRate: resolved.emailFillRate,
+        modeledFindRate: resolved.modeledFindRate,
         scores: scored.map((s) => ({
           id: s.p.id,
           hitRate: s.rate,
+          absoluteShare: s.absolute,
           dataCreditCost: s.p.dataCreditCost,
           hitPerCredit: s.score,
         })),
@@ -468,6 +494,20 @@ export function analyze(
     icpRule.column,
   ].filter((v, i, a) => a.indexOf(v) === i);
   const metrics = computeMetrics(simulation, findings, profile, keyFields, prices);
+
+  const waterfall = workflow.steps.find(
+    (s) => s.type === "waterfall" && s.providers?.length
+  );
+  const hitInfo = waterfall
+    ? resolveProviderHitRatesDetailed(waterfall, profile, rows)
+    : undefined;
+  const providerHitRates: Record<string, number> = {};
+  if (waterfall?.providers && hitInfo) {
+    waterfall.providers.forEach((p, i) => {
+      providerHitRates[p.id] = hitInfo.conditional[i] ?? 0;
+    });
+  }
+
   return {
     profile,
     simulation,
@@ -483,6 +523,12 @@ export function analyze(
       icpSource: resolvedIcp.source,
       icpGoal: options.icpGoal,
       workflowDescription: options.workflowDescription,
+      hitRateSource: hitInfo?.source,
+      emailFillRate: hitInfo?.emailFillRate,
+      modeledFindRate: hitInfo?.modeledFindRate,
+      providerHitRates: Object.keys(providerHitRates).length
+        ? providerHitRates
+        : undefined,
     },
   };
 }

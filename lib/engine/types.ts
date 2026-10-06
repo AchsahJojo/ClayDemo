@@ -156,6 +156,12 @@ export interface AnalysisAssumptions {
   icpSource: "pass_column" | "numeric_range" | "fallback";
   icpGoal?: string;
   workflowDescription?: string;
+  /** How waterfall provider rates were derived. */
+  hitRateSource?: "provider_win_column" | "fill_scaled_estimates" | "declared";
+  emailFillRate?: number;
+  modeledFindRate?: number;
+  /** Conditional hit rates by provider id (first waterfall step). */
+  providerHitRates?: Record<string, number>;
 }
 
 export interface AnalysisResult {

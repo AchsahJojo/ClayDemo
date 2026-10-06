@@ -20,8 +20,12 @@ export {
   expectedWaterfallDataCredits,
   expectedWaterfallActions,
   resolveProviderHitRates,
+  resolveProviderHitRatesDetailed,
+  absoluteWinsToConditional,
+  modeledFindRateFromConditional,
   DEFAULT_ICP_RULE,
 } from "./simulate";
+export type { HitRateSource, ResolvedHitRates } from "./simulate";
 export {
   analyze,
   applyRules,
