@@ -19,10 +19,10 @@ npm run build
 
 Sample fixtures load automatically from [`sample/companies.csv`](sample/companies.csv) (synthetic demo rows) and [`sample/workflow.json`](sample/workflow.json).
 
-**Live demo (temporary Vercel claim):** https://temporary-swift-boron-jjs9prv.vercel.app  
-Claim to keep: https://vercel.com/claim-deployment?code=ad40ca5c-9081-42d0-9855-028075b3b2d7
+**Live demo (temporary Vercel claim — current `main`):** https://temporary-instant-magnolia-0cu7m92.vercel.app  
+Claim to keep + enable auto-deploy from `main`: https://vercel.com/claim-deployment?code=99bc9911-df5d-4b5c-a741-92306d929cf5
 
-Or connect the repo to your Vercel account for a stable URL.
+After claiming, connect the GitHub repo in Vercel (Production Branch = `main`) so every push to `main` redeploys automatically. The old temporary URL will not update.
 
 ## Architecture
 
