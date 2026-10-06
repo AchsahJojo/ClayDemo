@@ -62,27 +62,66 @@ export function expectedWaterfallActions(
   return expected;
 }
 
+export type HitRateSource =
+  | "provider_win_column"
+  | "fill_scaled_estimates"
+  | "declared";
+
+export interface ResolvedHitRates {
+  /** Sequential conditional hit rates for the waterfall cascade. */
+  conditional: number[];
+  /** Mutually exclusive share of all rows each provider wins. */
+  absolute: number[];
+  source: HitRateSource;
+  emailFillRate: number;
+  /** 1 − Π(1 − conditional_i) — should match emailFillRate when scaled. */
+  modeledFindRate: number;
+}
+
+/**
+ * Convert mutually exclusive absolute win fractions into sequential
+ * conditional hit rates so overall P(find) ≈ Σ absolute.
+ */
+export function absoluteWinsToConditional(absolute: number[]): number[] {
+  let remaining = 1;
+  return absolute.map((abs) => {
+    const clamped = Math.max(0, Math.min(1, abs));
+    if (remaining <= 1e-12) return 0;
+    const hit = Math.min(1, clamped / remaining);
+    remaining = Math.max(0, remaining - clamped);
+    return hit;
+  });
+}
+
+export function modeledFindRateFromConditional(conditional: number[]): number {
+  return 1 - conditional.reduce((miss, h) => miss * (1 - h), 1);
+}
+
 /**
  * Hit rates from CSV when possible:
- * - provider-win column wins / rowCount when any wins exist
- * - else scale declared rates to the email/field fill rate from CSV
- * - else declared JSON rates
+ * - provider-win column → absolute wins/N, then conditional cascade
+ * - else declared shares × email fill (labeled estimates), then conditional
+ * - else declared JSON rates as conditional (demo fallback)
  */
-export function resolveProviderHitRates(
+export function resolveProviderHitRatesDetailed(
   step: WorkflowStep,
   profile: CsvProfile,
   rows?: CsvRow[]
-): number[] {
+): ResolvedHitRates {
   const providers = step.providers ?? [];
+  const fillFromProfile = columnFillRate(profile, step.field);
+  const fillFromRows =
+    rows && rows.length ? fieldNotBlankRate(rows, step.field) : 0;
+  const emailFillRate = Math.max(fillFromProfile, fillFromRows);
+
   const win = step.providerWinColumn
     ? profile.providerWins.find((p) => p.column === step.providerWinColumn)
     : undefined;
-
   const hasWins =
     !!win && Object.values(win.wins).some((count) => count > 0);
 
   if (hasWins && win) {
-    return providers.map((p) => {
+    const absolute = providers.map((p) => {
       for (const [name, rate] of Object.entries(win.hitRates)) {
         if (
           name.toLowerCase() === (p.name ?? p.id).toLowerCase() ||
@@ -93,23 +132,60 @@ export function resolveProviderHitRates(
       }
       return 0;
     });
+    const conditional = absoluteWinsToConditional(absolute);
+    return {
+      conditional,
+      absolute,
+      source: "provider_win_column",
+      emailFillRate,
+      modeledFindRate: modeledFindRateFromConditional(conditional),
+    };
   }
-
-  const fillFromProfile = columnFillRate(profile, step.field);
-  const fillFromRows =
-    rows && rows.length ? fieldNotBlankRate(rows, step.field) : 0;
-  const fill = Math.max(fillFromProfile, fillFromRows);
 
   const declared = providers.map((p) => p.hitRate ?? 0);
   const sumDeclared = declared.reduce((a, b) => a + b, 0);
 
-  if (fill > 0 && sumDeclared > 0) {
-    return declared.map((d) => Math.min(1, (d / sumDeclared) * fill));
+  if (emailFillRate > 0 && sumDeclared > 0) {
+    const absolute = declared.map((d) => (d / sumDeclared) * emailFillRate);
+    const conditional = absoluteWinsToConditional(absolute);
+    return {
+      conditional,
+      absolute,
+      source: "fill_scaled_estimates",
+      emailFillRate,
+      modeledFindRate: modeledFindRateFromConditional(conditional),
+    };
   }
-  if (fill > 0) {
-    return providers.map((_, i) => (i === 0 ? fill : 0));
+
+  if (emailFillRate > 0) {
+    const absolute = providers.map((_, i) => (i === 0 ? emailFillRate : 0));
+    const conditional = absoluteWinsToConditional(absolute);
+    return {
+      conditional,
+      absolute,
+      source: "fill_scaled_estimates",
+      emailFillRate,
+      modeledFindRate: modeledFindRateFromConditional(conditional),
+    };
   }
-  return declared;
+
+  const conditional = declared.map((d) => Math.min(1, Math.max(0, d)));
+  return {
+    conditional,
+    absolute: [],
+    source: "declared",
+    emailFillRate,
+    modeledFindRate: modeledFindRateFromConditional(conditional),
+  };
+}
+
+/** Conditional hit rates only (back-compat for simulate / rules). */
+export function resolveProviderHitRates(
+  step: WorkflowStep,
+  profile: CsvProfile,
+  rows?: CsvRow[]
+): number[] {
+  return resolveProviderHitRatesDetailed(step, profile, rows).conditional;
 }
 
 function evaluateRunConditionFraction(

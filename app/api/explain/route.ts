@@ -16,6 +16,13 @@ function templateExplain(result: AnalysisResult): string {
     lines.push(
       `ICP pass rate ${(a.icpPassRate * 100).toFixed(0)}% from ${a.icpSource.replace("_", " ")}. Data Credits use Clay-style refunds (charge hits only); Actions still bill per waterfall attempt.`
     );
+    if (a.hitRateSource === "fill_scaled_estimates") {
+      lines.push(
+        `Provider hit rates are estimates scaled to the ${((a.emailFillRate ?? 0) * 100).toFixed(0)}% email fill (no provider-win column); modeled find rate ${((a.modeledFindRate ?? 0) * 100).toFixed(0)}%.`
+      );
+    } else if (a.hitRateSource === "provider_win_column") {
+      lines.push("Provider hit rates come from the CSV provider-win column.");
+    }
   }
   lines.push("");
   for (const f of result.findings) {

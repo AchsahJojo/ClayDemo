@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
+  absoluteWinsToConditional,
   analyze,
   buildFixedWorkflow,
   expectedWaterfallActions,
   expectedWaterfallDataCredits,
+  modeledFindRateFromConditional,
   parseCsv,
   parseWorkflow,
   profileCsv,
   resolveIcpPassRate,
   resolveProviderHitRates,
+  resolveProviderHitRatesDetailed,
   simulate,
   topologicalOrder,
 } from "@/lib/engine";
@@ -190,30 +193,46 @@ describe("ICP from CSV", () => {
   });
 });
 
+describe("hit rate scaling matches email fill", () => {
+  it("converts absolute shares into conditional rates with overall find ≈ fill", () => {
+    const absolute = [0.185, 0.317, 0.198]; // sum 0.7
+    const conditional = absoluteWinsToConditional(absolute);
+    expect(modeledFindRateFromConditional(conditional)).toBeCloseTo(0.7, 5);
+  });
+
+  it("scales declared rates to CSV fill so modeled find matches fill", () => {
+    const rows = makeRows();
+    const profile = profileCsv(rows, handWorkflow);
+    const step = handWorkflow.steps.find((s) => s.id === "work_email")!;
+    const resolved = resolveProviderHitRatesDetailed(step, profile, rows);
+    expect(resolved.source).toBe("fill_scaled_estimates");
+    expect(resolved.emailFillRate).toBeCloseTo(0.7, 5);
+    expect(resolved.modeledFindRate).toBeCloseTo(0.7, 5);
+  });
+});
+
 describe("hand example simulation", () => {
   it("computes dual-meter totals with refund-aware waterfall", () => {
     const rows = makeRows();
     const profile = profileCsv(rows, handWorkflow);
     const sim = simulate(handWorkflow, rows, profile);
-    // Hit rates scale to email fill (7/10) when no provider-win column — CSV-driven.
     const step = handWorkflow.steps.find((s) => s.id === "work_email")!;
     const rates = resolveProviderHitRates(step, profile, rows);
     const eDc = expectedWaterfallDataCredits(step.providers!, rates);
     const eAct = expectedWaterfallActions(step.providers!, rates, step.actionCost);
-    // contacts10 + waterfall + validate7 + emp10 + use_ai10 + export4
     expect(sim.actionsUsed).toBeCloseTo(10 + eAct * 10 + 7 + 10 + 10 + 4, 4);
-    // DC: contacts5 + waterfall + validate0.7 + emp20
     expect(sim.dataCreditsUsed).toBeCloseTo(5 + eDc * 10 + 0.7 + 20, 4);
   });
 
-  it("R1 filter-too-late and R4/R5 fire with savings", () => {
+  it("R1 and R5 fire; R4 DC savings are 0 when wins are exclusive fill shares", () => {
     const rows = makeRows();
     const profile = profileCsv(rows, handWorkflow);
     const result = analyze(handWorkflow, rows, profile);
     const rules = new Set(result.findings.map((f) => f.rule));
     expect(rules.has("R1")).toBe(true);
-    expect(rules.has("R4")).toBe(true);
     expect(rules.has("R5")).toBe(true);
+    // With fill-scaled exclusive shares + DC-on-hits, E[DC] is order-invariant
+    expect(rules.has("R4")).toBe(false);
     const r1 = result.findings.find((f) => f.rule === "R1")!;
     expect(r1.savingsActions).toBeGreaterThan(0);
     expect(r1.savingsDataCredits).toBeGreaterThan(0);
@@ -225,8 +244,15 @@ describe("hand example simulation", () => {
     );
     expect(r1.stepIds).not.toContain("employee_count");
     expect(r1.stepIds).toContain("find_contacts");
-    const r4 = result.findings.find((f) => f.rule === "R4")!;
-    expect(r4.details?.recommendedOrder).toEqual([
+  });
+
+  it("R4 still fires on independent declared rates when CSV has no email fill", () => {
+    const rows = makeRows().map((r) => ({ ...r, email: "" }));
+    const profile = profileCsv(rows, handWorkflow);
+    const result = analyze(handWorkflow, rows, profile);
+    const r4 = result.findings.find((f) => f.rule === "R4");
+    expect(r4).toBeTruthy();
+    expect(r4!.details?.recommendedOrder).toEqual([
       "prospeo",
       "hunter",
       "findymail",
@@ -252,12 +278,6 @@ describe("hand example simulation", () => {
     expect(fixed.description).not.toMatch(/Wasteful/i);
     expect(fixed.description).toMatch(/Outbound enrichment table/);
     expect(fixed.description).toMatch(/ICP goal/);
-    const wf = fixed.steps.find((s) => s.id === "work_email");
-    expect(wf?.providers?.map((p) => p.id)).toEqual([
-      "prospeo",
-      "hunter",
-      "findymail",
-    ]);
   });
 });
 
